@@ -1,0 +1,48 @@
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+
+	<PropertyGroup>
+		<TargetFramework>net9.0</TargetFramework>
+		<ImplicitUsings>enable</ImplicitUsings>
+		<EnableSdkContainerDebugging>True</EnableSdkContainerDebugging>
+		<ContainerBaseImage>mcr.microsoft.com/dotnet/aspnet:9.0</ContainerBaseImage>
+		<DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
+	</PropertyGroup>
+
+	<ItemGroup>
+	  <None Remove="restic\0.18.1\restic" />
+	  <None Remove="restic\0.18.1\restic.exe" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <Content Include="restic\0.18.1\restic">
+	    <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+	  </Content>
+	  <Content Include="restic\0.18.1\restic.exe">
+	    <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+	  </Content>
+	</ItemGroup>
+
+	<ItemGroup>
+		<PackageReference Include="Microsoft.AspNetCore.Authentication.JwtBearer" Version="9.0.1" />
+		<PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="9.0.10">
+			<PrivateAssets>all</PrivateAssets>
+			<IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+		</PackageReference>
+		<PackageReference Include="Microsoft.VisualStudio.Azure.Containers.Tools.Targets" Version="1.22.1" />
+		<PackageReference Include="Pomelo.EntityFrameworkCore.MySql" Version="9.0.0" />
+		<PackageReference Include="Swashbuckle.AspNetCore" Version="7.2.0" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\ResticManager.Application\ResticManager.Application.csproj" />
+		<ProjectReference Include="..\ResticManager.Models\ResticManager.Models.csproj" />
+		<ProjectReference Include="..\ResticManager.MySql\ResticManager.MySql.csproj" />
+		<ProjectReference Include="..\ResticManager.PgSql\ResticManager.PgSql.csproj" />
+		<ProjectReference Include="..\ResticManager.Sqlite\ResticManager.Sqlite.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+	  <Folder Include="data\" />
+	</ItemGroup>
+
+</Project>

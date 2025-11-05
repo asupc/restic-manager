@@ -1,0 +1,8 @@
+version: '3.4'
+
+services:
+  restic-manager:
+    image: restic-manager:${TAG:-latest}
+    build:
+      context: .
+      dockerfile: ./ResticManager.Web/Dockerfile

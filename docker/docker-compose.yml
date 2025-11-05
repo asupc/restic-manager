@@ -1,0 +1,15 @@
+version: '3.4'
+
+services:
+  restic-manager:
+    image: asupc/restic-manager:latest
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT}
+      - ASPNETCORE_URLS=http://0.0.0.0:80
+      - TZ=Asia/Shanghai
+    ports:
+      - "5051:80"
+    volumes:
+      - "./data/:/app/data"
+      - "d:/restic:/restic"
+      - "d:/apps:/apps"

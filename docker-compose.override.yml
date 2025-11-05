@@ -1,0 +1,12 @@
+version: '3.4'
+
+services:
+  restic-manager:
+    environment:
+      - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT}
+      - ASPNETCORE_URLS=http://0.0.0.0:80
+      - TZ=Asia/Shanghai
+    ports:
+      - "5050:80"
+    volumes:
+        - "d:/restic:/restic"
