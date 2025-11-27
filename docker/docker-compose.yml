@@ -7,9 +7,11 @@ services:
       - ASPNETCORE_ENVIRONMENT=${ENVIRONMENT}
       - ASPNETCORE_URLS=http://0.0.0.0:80
       - TZ=Asia/Shanghai
+      - RESTIC_CACHE_DIR=/app/data/cache
     ports:
       - "5051:80"
     volumes:
       - "./data/:/app/data"
       - "d:/restic:/restic"
       - "d:/apps:/apps"
+    container_name: restic-manager

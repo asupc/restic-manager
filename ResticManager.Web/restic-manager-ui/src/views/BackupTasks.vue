@@ -1,7 +1,7 @@
 <template>
   <div class="backup-tasks-container">
     <div class="page-header">
-      <h1>备份任务管理</h1>
+      <h2>备份任务管理</h2>
       <div>
         <el-button type="primary" @click="openCreateDialog" icon="el-icon-plus" size="small">
           新增任务

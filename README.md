@@ -17,7 +17,7 @@
 
 ### 后端
 
-- [.NET 9](https://dotnet.microsoft.com/download/dotnet/9.0)
+- [.NET 10](https://dotnet.microsoft.com/download/dotnet/10.0)
 - [Entity Framework Core](https://docs.microsoft.com/en-us/ef/core/)
 - 多数据库支持 (SQLite/MySQL/PostgreSQL)
 - [JWT](https://jwt.io/) 认证
@@ -36,9 +36,8 @@
 
 本项目支持多种数据库：
 
-1. SQLite (默认，适合小型部署)
-2. MySQL (适合中型部署)
-3. PostgreSQL (适合大型部署)
+1. SQLite (推荐、默认，适合小型部署)
+2. PostgreSQL (适合大型部署)
 
 ## 部署指南
 
@@ -100,7 +99,7 @@ docker-compose up -d
 
 ### Windows 部署
 
-1. 确保系统安装了 [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)
+1. 确保系统安装了 [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)
 
 2. 克隆或下载项目源代码
 
@@ -128,15 +127,15 @@ docker-compose up -d
 
 ### Linux 部署
 
-1. 安装 [.NET 9 SDK](https://dotnet.microsoft.com/download/dotnet/9.0)：
+1. 安装 [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0)：
 
    ```bash
    # Ubuntu/Debian
    sudo apt-get update
-   sudo apt-get install -y dotnet-sdk-9.0
+   sudo apt-get install -y dotnet-sdk-10.0
 
    # CentOS/RHEL/Fedora
-   sudo dnf install dotnet-sdk-9.0
+   sudo dnf install dotnet-sdk-10.0
    ```
 
 2. 安装 Node.js 和 npm：
@@ -167,6 +166,8 @@ docker-compose up -d
 
 ### 配置数据库
 
+#### 无配置时，系统将自动创建默认配置文件，启动后可以自行修改配置文件，修改后重新启动服务生效
+
 在 `data/appsettings.json` 中配置数据库：
 
 ```json
@@ -176,7 +177,6 @@ docker-compose up -d
   },
   "ConnectionStrings": {
     "SqliteConnection": "Data Source=./data/restic-manager.db",
-    "MySqlConnection": "server=localhost;port=3306;database=ResticManager;user=root;password=your_password",
     "PostgreSqlConnection": "Host=localhost;Database=ResticManager;Username=postgres;Password=your_password"
   }
 }
@@ -185,7 +185,6 @@ docker-compose up -d
 将 `DbType` 设置为所需的数据库类型：
 
 - `sqlite` for SQLite
-- `mysql` for MySQL
 - `postgresql` for PostgreSQL
 
 ### 配置 Restic

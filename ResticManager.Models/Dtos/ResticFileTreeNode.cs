@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace ResticManager.Models;
+namespace ResticManager.Models.Dtos;
 
 /// <summary>
 /// 表示快照中文件的树形节点结构

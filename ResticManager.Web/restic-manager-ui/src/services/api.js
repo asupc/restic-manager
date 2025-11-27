@@ -8,115 +8,105 @@ let requestCount = 0;
 
 // 显示loading
 const showLoading = (text = "加载中...") => {
-  store.dispatch("updateLoading", { loading: true, text });
+    store.dispatch("updateLoading", { loading: true, text });
 };
 
 // 隐藏loading
 const hideLoading = () => {
-  // 清除定时器
-  if (loadingTimer) {
-    clearTimeout(loadingTimer);
-    loadingTimer = null;
-  }
+    // 清除定时器
+    if (loadingTimer) {
+        clearTimeout(loadingTimer);
+        loadingTimer = null;
+    }
 
-  // 减少请求计数
-  requestCount--;
+    // 减少请求计数
+    requestCount--;
 
-  // 只有当所有请求都完成时才隐藏loading
-  if (requestCount <= 0) {
-    requestCount = 0;
-    store.dispatch("updateLoading", { loading: false });
-  }
+    // 只有当所有请求都完成时才隐藏loading
+    if (requestCount <= 0) {
+        requestCount = 0;
+        store.dispatch("updateLoading", { loading: false });
+    }
 };
 
 // 开始请求处理
 const startRequest = (text) => {
-  requestCount++;
+    requestCount++;
 
-  // 如果已经有定时器在运行，则不需要重新设置
-  if (loadingTimer) return;
+    // 如果已经有定时器在运行，则不需要重新设置
+    if (loadingTimer) return;
 
-  // 设置100ms延迟显示loading
-  loadingTimer = setTimeout(() => {
-    showLoading(text);
-    loadingTimer = null;
-  }, 100);
+    // 设置100ms延迟显示loading
+    loadingTimer = setTimeout(() => {
+        showLoading(text);
+        loadingTimer = null;
+    }, 100);
 };
 
 // 结束请求处理
 const endRequest = () => {
-  hideLoading();
+    hideLoading();
 };
 
 // 根据环境设置baseURL
 const getBaseURL = () => {
-  // 在生产环境中使用相对路径
-  if (process.env.NODE_ENV === "production") {
-    return "/api";
-  }
-  // 开发环境中使用本地后端地址
-  return "http://localhost:5050/api";
+    // 在生产环境中使用相对路径
+    if (process.env.NODE_ENV === "production") {
+        return "/api";
+    }
+    // 开发环境中使用本地后端地址
+    return "http://localhost:5050/api";
 };
 
 const api = axios.create({
-  baseURL: getBaseURL(),
-  timeout: 30000, // 设置全局超时时间为30秒
+    baseURL: getBaseURL(),
+    timeout: 60000 * 60, // 设置全局超时时间为30秒
 });
 
 api.interceptors.request.use(
-  (config) => {
-    const isAuthEndpoint =
-      config.url.includes("/auth/login") ||
-      config.url.includes("/auth/register");
-    const token = localStorage.getItem("token");
+    (config) => {
+        const isAuthEndpoint =
+            config.url.includes("/auth/login") ||
+            config.url.includes("/auth/register");
+        const token = localStorage.getItem("token");
 
-    if (token && !isAuthEndpoint) {
-      config.headers.Authorization = `Bearer ${token}`;
+        if (token && !isAuthEndpoint) {
+            config.headers.Authorization = `Bearer ${token}`;
+        }
+
+        // 开始请求，设置loading
+        // 可以通过 config.loadingText 设置自定义loading文本
+        startRequest(config.loadingText);
+
+        return config;
+    },
+    (error) => {
+        // 请求出错，结束loading
+        endRequest();
+        return Promise.reject(error);
     }
-
-    // 开始请求，设置loading
-    // 可以通过 config.loadingText 设置自定义loading文本
-    startRequest(config.loadingText);
-
-    return config;
-  },
-  (error) => {
-    // 请求出错，结束loading
-    endRequest();
-    return Promise.reject(error);
-  }
 );
 
 api.interceptors.response.use(
-  (response) => {
-    // 响应成功，结束loading
-    endRequest();
-    return response;
-  },
-  (error) => {
-    // 响应出错，结束loading
-    endRequest();
+    (response) => {
+        // 响应成功，结束loading
+        endRequest();
+        return response;
+    },
+    (error) => {
+        // 响应出错，结束loading
+        endRequest();
 
-    if (error.response && error.response.status === 401) {
-      const isLoginEndpoint = error.config.url.includes("/auth/login");
-      if (!isLoginEndpoint) {
-        localStorage.removeItem("token");
-        window.location.href = "/login";
-      }
+        if (error.response && error.response.status === 401) {
+            const isLoginEndpoint = error.config.url.includes("/auth/login");
+            if (!isLoginEndpoint) {
+                localStorage.removeItem("token");
+                window.location.href = "/login";
+            }
+        }
+        HttpErrorHandler.handleApiError(error);
+        return Promise.reject(error);
     }
-    HttpErrorHandler.handleApiError(error);
-    return Promise.reject(error);
-  }
 );
-
-// 使用示例:
-// 1. 默认使用方式 (延迟100ms显示"加载中...")
-// await api.get('/users')
-//
-// 2. 自定义loading文本
-// await api.get('/users', { loadingText: '正在获取用户信息...' })
-//
-// 3. 禁用loading
-// await api.get('/users', { loadingText: null })
 
 export default api;

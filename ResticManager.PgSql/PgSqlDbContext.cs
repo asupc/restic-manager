@@ -65,12 +65,5 @@ public class PgSqlDbContext : ResticManagerDbContext
             entity.Property(e => e.Status).IsRequired().HasMaxLength(20);
             entity.Property(e => e.Error).HasMaxLength(2000);
         });
-
-        // 配置BackupFile实体
-        modelBuilder.Entity<BackupFile>(entity =>
-        {
-            entity.HasKey(e => e.Id);
-            entity.Property(e => e.Path).IsRequired();
-        });
     }
 }

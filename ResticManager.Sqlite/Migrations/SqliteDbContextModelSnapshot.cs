@@ -17,38 +17,6 @@ namespace ResticManager.Sqlite.Migrations
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "9.0.10");
 
-            modelBuilder.Entity("ResticManager.Models.BackupFile", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("INTEGER");
-
-                    b.Property<int>("BackupTaskId")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<DateTime>("ModifiedAt")
-                        .HasColumnType("TEXT");
-
-                    b.Property<string>("Path")
-                        .IsRequired()
-                        .HasColumnType("TEXT");
-
-                    b.Property<long>("Size")
-                        .HasColumnType("INTEGER");
-
-                    b.Property<string>("SnapshotId")
-                        .HasColumnType("TEXT");
-
-                    b.Property<DateTime>("SnapshotTime")
-                        .HasColumnType("TEXT");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("BackupTaskId");
-
-                    b.ToTable("BackupFile");
-                });
-
             modelBuilder.Entity("ResticManager.Models.BackupRecord", b =>
                 {
                     b.Property<int>("Id")
@@ -258,17 +226,6 @@ namespace ResticManager.Sqlite.Migrations
                         .IsUnique();
 
                     b.ToTable("Users");
-                });
-
-            modelBuilder.Entity("ResticManager.Models.BackupFile", b =>
-                {
-                    b.HasOne("ResticManager.Models.BackupTask", "Task")
-                        .WithMany()
-                        .HasForeignKey("BackupTaskId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Task");
                 });
 
             modelBuilder.Entity("ResticManager.Models.BackupRecord", b =>

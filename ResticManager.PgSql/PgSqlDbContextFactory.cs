@@ -17,9 +17,8 @@ public class PgSqlDbContextFactory : IDesignTimeDbContextFactory<PgSqlDbContext>
         
         var builder = new ConfigurationBuilder()
             .SetBasePath(basePath)
-            .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
-            .AddJsonFile($"appsettings.{environment}.json", optional: true);
-            
+            .AddJsonFile("data/appsettings.json", optional: false, reloadOnChange: true);
+
         var configuration = builder.Build();
 
         var connectionString = configuration.GetConnectionString("PostgreSqlConnection") 

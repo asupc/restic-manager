@@ -1,3 +1,4 @@
+using ResticManager.Models.Dtos;
 using System.Text.Json.Serialization;
 
 namespace ResticManager.Models;

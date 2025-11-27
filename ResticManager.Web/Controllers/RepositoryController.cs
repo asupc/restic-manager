@@ -135,20 +135,6 @@ public class RepositoryController : ControllerBase
         }
     }
 
-    //[HttpGet("{id}/snapshots/{snapshotId}/files-tree")]
-    //public async Task<ActionResult<List<ResticFileTreeNode>>> ListFilesInSnapshotTree(int id, string snapshotId)
-    //{
-    //    try
-    //    {
-    //        var treeNodes = await _repositoryService.ListFilesInSnapshotTreeAsync(id, snapshotId, "/");
-    //        return Ok(treeNodes);
-    //    }
-    //    catch (Exception ex)
-    //    {
-    //        return BadRequest(new { Error = ex.Message });
-    //    }
-    //}
-
     [HttpGet("{id}/snapshots/{snapshotId}/subdirectory-files-tree")]
     public async Task<ActionResult<List<ResticFileTreeNode>>> ListSubdirectoryFilesInSnapshotTree(int id, string snapshotId, [FromQuery] string path = "")
     {
@@ -156,6 +142,20 @@ public class RepositoryController : ControllerBase
         {
             var subTreeNodes = await _repositoryService.ListSubdirectoryFilesInSnapshotTreeAsync(id, snapshotId, path);
             return Ok(subTreeNodes);
+        }
+        catch (Exception ex)
+        {
+            return BadRequest(new { Error = ex.Message });
+        }
+    }
+
+    [HttpGet("{id}/snapshots/{snapshotId1}/diff/{snapshotId2}")]
+    public async Task<ActionResult<SnapshotDiffResult>> DiffSnapshots(int id, string snapshotId1, string snapshotId2)
+    {
+        try
+        {
+            var diffResult = await _repositoryService.DiffSnapshotsAsync(id, snapshotId1, snapshotId2);
+            return Ok(diffResult);
         }
         catch (Exception ex)
         {
@@ -192,40 +192,14 @@ public class RepositoryController : ControllerBase
     }
 
     [HttpDelete("{id}/snapshots/{snapshotId}")]
-    public async Task<IActionResult> DeleteSnapshot(int id, string snapshotId)
+    public async Task<ActionResult<List<Repository>>> Delete(int id, string snapshotId)
     {
-        try
-        {
-            await _repositoryService.DeleteSnapshotAsync(id, snapshotId);
-            return Ok(new { message = "快照删除成功" });
-        }
-        catch (Exception ex)
-        {
-            return BadRequest(new { Error = ex.Message });
-        }
+        await _repositoryService.DeleteSnapshotAsync(id, snapshotId);
+        return Ok();
     }
-}
-
-public class RestoreFileRequest
-{
-    public string SnapshotId { get; set; } = string.Empty;
-    public string FilePath { get; set; } = string.Empty;
-    public string TargetPath { get; set; } = string.Empty;
 }
 
 public class RestoreRequest
 {
-    public string TargetPath { get; set; } = string.Empty;
-}
-
-public class ResticFileTreeNode
-{
-    public string Name { get; set; } = string.Empty;
-    public string Type { get; set; } = string.Empty;
-    public long Size { get; set; }
-    public string Path { get; set; } = string.Empty;
-    public string Permissions { get; set; } = string.Empty;
-    public DateTime Mtime { get; set; }
-    public bool IsLeaf { get; set; }
-    public List<ResticFileTreeNode> Children { get; set; } = new();
+    public string TargetPath { get; set; }
 }

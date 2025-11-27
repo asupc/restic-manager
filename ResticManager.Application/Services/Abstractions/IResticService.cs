@@ -45,6 +45,16 @@ public interface IResticService
     Task<List<ResticFileInfo>> ListFilesInSnapshotAsync(string repoPath, string password, string snapshotId, string dirPath);
 
     /// <summary>
+    /// 比较快照之间的差异
+    /// </summary>
+    /// <param name="repoPath">仓库路径</param>
+    /// <param name="password">仓库密码</param>
+    /// <param name="snapshotId1">第一个快照ID</param>
+    /// <param name="snapshotId2">第二个快照ID</param>
+    /// <returns>差异信息</returns>
+    Task<SnapshotDiffResult> DiffSnapshotsAsync(string repoPath, string password, string snapshotId1, string snapshotId2);
+
+    /// <summary>
     /// 恢复快照
     /// </summary>
     /// <param name="repoPath">仓库路径</param>
@@ -98,7 +108,7 @@ public interface IResticService
     /// </summary>
     /// <param name="repoPath">仓库路径</param>
     /// <param name="password">仓库密码</param>
-    /// <returns>统计信息</returns>
+    /// <returns>仓库统计信息</returns>
     Task<RepositoryStats> GetStatsAsync(string repoPath, string password);
 
     /// <summary>

@@ -1,3 +1,5 @@
+using ResticManager.Models.Dtos;
+
 namespace ResticManager.Models;
 
 /// <summary>

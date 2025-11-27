@@ -2,14 +2,12 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
-using Quartz;
 using ResticManager.Application.Jobs;
 using ResticManager.Application.Services.Abstractions;
 using ResticManager.Application.Services.Implements;
 using ResticManager.Application.Utils;
 using ResticManager.Data;
 using ResticManager.Models;
-using ResticManager.MySql;
 using ResticManager.PgSql;
 using ResticManager.Sqlite;
 using ResticManager.Web.Middleware;
@@ -34,11 +32,6 @@ builder.Services.AddDbContext<ResticManagerDbContext>(options =>
 {
     switch (databaseProvider.ToLower())
     {
-        case "mysql":
-            var mysqlConnectionString = builder.Configuration.GetConnectionString("MySqlConnection");
-            var serverVersion = ServerVersion.AutoDetect(mysqlConnectionString);
-            options.UseMySql(mysqlConnectionString, serverVersion);
-            break;
         case "postgresql":
             options.UseNpgsql(builder.Configuration.GetConnectionString("PostgreSqlConnection"));
             break;
@@ -51,9 +44,9 @@ builder.Services.AddDbContext<ResticManagerDbContext>(options =>
 // 根据数据库类型注册具体实现
 switch (databaseProvider.ToLower())
 {
-    case "mysql":
-        builder.Services.AddScoped<ResticManagerDbContext, MySqlDbContext>();
-        break;
+    //case "mysql":
+    //    builder.Services.AddScoped<ResticManagerDbContext, MySqlDbContext>();
+    //    break;
     case "postgresql":
         builder.Services.AddScoped<ResticManagerDbContext, PgSqlDbContext>();
         break;

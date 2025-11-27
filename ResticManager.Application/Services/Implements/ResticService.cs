@@ -23,34 +23,15 @@ public class ResticService : IResticService
         _logger = logger;
     }
 
+
     public async Task InitializeRepositoryAsync(string repoPath, string password)
     {
-        var startInfo = new ProcessStartInfo
+        var arguments = $"init --repo \"{repoPath}\"";
+        // 使用参数数组方式传递密码（需要两次输入：设置密码和确认密码）
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password, password);
+
+        if (exitCode != 0)
         {
-            FileName = _resticPath,
-            Arguments = $"init --repo \"{repoPath}\"",
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
-        };
-
-        using var process = new Process { StartInfo = startInfo };
-        process.Start();
-
-        // 输入密码
-        await process.StandardInput.WriteLineAsync(password);
-        await process.StandardInput.WriteLineAsync(password);
-        process.StandardInput.Close();
-
-        await process.WaitForExitAsync();
-
-        if (process.ExitCode != 0)
-        {
-            var error = await process.StandardError.ReadToEndAsync();
             _logger.LogError("初始化仓库失败: {Error}", error);
             throw new Exception($"初始化仓库失败: {error}");
         }
@@ -80,47 +61,9 @@ public class ResticService : IResticService
             }
         }
 
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = _resticPath,
-            Arguments = args,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
-        };
+        var (outputLines, errorLines, exitCode) = await ExecuteResticCommandWithLineOutputAsync(args, password);
 
-        using var process = new Process { StartInfo = startInfo };
-        process.Start();
-
-        // 输入密码
-        await process.StandardInput.WriteLineAsync(password);
-        process.StandardInput.Close();
-
-        var outputLines = new List<string>();
-        var errorLines = new List<string>();
-
-        process.OutputDataReceived += (sender, e) =>
-        {
-            if (!string.IsNullOrEmpty(e.Data))
-                outputLines.Add(e.Data);
-        };
-
-        process.ErrorDataReceived += (sender, e) =>
-        {
-            if (!string.IsNullOrEmpty(e.Data))
-                errorLines.Add(e.Data);
-        };
-
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
-
-        await process.WaitForExitAsync();
-
-        if (process.ExitCode != 0)
+        if (exitCode != 0)
         {
             var errorOutput = string.Join(Environment.NewLine, errorLines);
             _logger.LogError("备份失败: {Error}", errorOutput);
@@ -162,32 +105,10 @@ public class ResticService : IResticService
 
     public async Task<List<SnapshotInfo>> ListSnapshotsAsync(string repoPath, string password)
     {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = _resticPath,
-            Arguments = $"snapshots --repo \"{repoPath}\" --json",
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
-        };
+        var arguments = $"snapshots --repo \"{repoPath}\" --json";
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
 
-        using var process = new Process { StartInfo = startInfo };
-        process.Start();
-
-        // 输入密码
-        await process.StandardInput.WriteLineAsync(password);
-        process.StandardInput.Close();
-
-        var output = await process.StandardOutput.ReadToEndAsync();
-        var error = await process.StandardError.ReadToEndAsync();
-
-        await process.WaitForExitAsync();
-
-        if (process.ExitCode != 0)
+        if (exitCode != 0)
         {
             _logger.LogError("获取快照列表失败: {Error}", error);
             throw new Exception($"获取快照列表失败: {error}");
@@ -206,54 +127,34 @@ public class ResticService : IResticService
         }
     }
 
+
     public async Task<List<ResticFileInfo>> ListFilesInSnapshotAsync(string repoPath, string password, string snapshotId, string dirPath)
     {
-        var startInfo = new ProcessStartInfo
+        var formattedDirPath = dirPath.Replace(":\\", "/").Replace("\\", "/");
+        if (string.IsNullOrEmpty(formattedDirPath))
         {
-            FileName = _resticPath,
-            Arguments = $@"-r {repoPath} ls {snapshotId}  ""{dirPath}"" --json",
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
-        };
-        Console.WriteLine($"Arguments：{startInfo.Arguments}");
+            formattedDirPath = "/";
+        }
+        if (!formattedDirPath.StartsWith("/"))
+        {
+            formattedDirPath = $"/{formattedDirPath}";
+        }
+
+        // 移除末尾的斜杠（根目录除外）
+        if (formattedDirPath.Length > 1 && formattedDirPath.EndsWith("/"))
+        {
+            formattedDirPath = formattedDirPath.TrimEnd('/');
+        }
+
+        var arguments = $@"-r ""{repoPath}"" ls {snapshotId} ""{formattedDirPath}"" --json";
+        Console.WriteLine($"Arguments：{arguments}");
 
         Stopwatch stopwatch = new Stopwatch();
         stopwatch.Start();
-        using var process = new Process { StartInfo = startInfo };
 
+        var (outputLines, errorLines, exitCode) = await ExecuteResticCommandWithLineOutputAsync(arguments, password);
 
-        process.Start();
-
-        // 输入密码
-        await process.StandardInput.WriteLineAsync(password);
-        process.StandardInput.Close();
-
-        var outputLines = new List<string>();
-        var errorLines = new List<string>();
-
-        process.OutputDataReceived += (sender, e) =>
-        {
-            if (!string.IsNullOrEmpty(e.Data))
-                outputLines.Add(e.Data);
-        };
-
-        process.ErrorDataReceived += (sender, e) =>
-        {
-            if (!string.IsNullOrEmpty(e.Data))
-                errorLines.Add(e.Data);
-        };
-
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
-
-        await process.WaitForExitAsync();
-
-        if (process.ExitCode != 0)
+        if (exitCode != 0)
         {
             var errorOutput = string.Join(Environment.NewLine, errorLines);
             _logger.LogError("获取文件列表失败: {Error}", errorOutput);
@@ -268,12 +169,18 @@ public class ResticService : IResticService
                 var file = JsonSerializer.Deserialize<ResticFileInfo>(line);
                 if (file != null)
                 {
-                    //if (string.IsNullOrEmpty(file.Path) && file.Paths.Count > 0)
-                    //{
-                    //    file.Path = file.Paths.FirstOrDefault();
-                    //    file.Name = file.Path;
-                    //    file.Type = "dir";
-                    //}
+                    // 如果路径为空但有路径列表，则使用第一个路径
+                    if (string.IsNullOrEmpty(file.Path) && file.Paths?.Count > 0)
+                    {
+                        file.Path = file.Paths.First();
+                    }
+
+                    // 确保名称不为空
+                    if (string.IsNullOrEmpty(file.Name) && !string.IsNullOrEmpty(file.Path))
+                    {
+                        file.Name = Path.GetFileName(file.Path.TrimEnd('/'));
+                    }
+
                     files.Add(file);
                 }
             }
@@ -283,19 +190,217 @@ public class ResticService : IResticService
             }
         }
 
-
         stopwatch.Stop();
         _logger.LogInformation($"成功获取文件列表，共 {files.Count} 个文件,耗时：{stopwatch.ElapsedMilliseconds} ms");
 
-        if (files.Count(n => !string.IsNullOrEmpty(n.Type)) == 0 && files.Count() == 1)
+        // 如果返回的是目录本身的信息，我们需要获取该目录下的文件
+        if (files.Count(f => !string.IsNullOrEmpty(f.Type)) == 0 && files.Count == 1)
         {
-            files[0].Path = files.FirstOrDefault().Paths.FirstOrDefault();
-            files[0].Name = files.FirstOrDefault().Path;
-            files[0].Type = "dir";
-            //return await ListFilesInSnapshot(repoPath, password, snapshotId, files.FirstOrDefault().Paths.FirstOrDefault());
+            // 重新执行命令获取目录内容
+            var targetPath = files.FirstOrDefault()?.Paths?.FirstOrDefault() ?? formattedDirPath;
+            var newArgs = $@"-r ""{repoPath}"" ls {snapshotId} ""{targetPath}"" --json";
+            var (retryOutputLines, retryErrorLines, retryExitCode) = await ExecuteResticCommandWithLineOutputAsync(newArgs, password);
+
+            if (retryExitCode != 0)
+            {
+                var errorOutput = string.Join(Environment.NewLine, retryErrorLines);
+                _logger.LogError("获取文件列表失败: {Error}", errorOutput);
+                throw new Exception($"获取文件列表失败: {errorOutput}");
+            }
+
+            files.Clear();
+            foreach (var line in retryOutputLines)
+            {
+                try
+                {
+                    var file = JsonSerializer.Deserialize<ResticFileInfo>(line);
+                    if (file != null && !string.IsNullOrEmpty(file.Type))
+                    {
+                        // 如果路径为空但有路径列表，则使用第一个路径
+                        if (string.IsNullOrEmpty(file.Path) && file.Paths?.Count > 0)
+                        {
+                            file.Path = file.Paths.First();
+                        }
+
+                        // 确保名称不为空
+                        if (string.IsNullOrEmpty(file.Name) && !string.IsNullOrEmpty(file.Path))
+                        {
+                            file.Name = Path.GetFileName(file.Path.TrimEnd('/'));
+                        }
+
+                        files.Add(file);
+                    }
+                }
+                catch
+                {
+                    // 忽略解析失败的行
+                }
+            }
         }
+
         return files.Where(n => !string.IsNullOrEmpty(n.Type)).ToList();
-    } 
+    }
+
+
+    public async Task<SnapshotDiffResult> DiffSnapshotsAsync(string repoPath, string password, string snapshotId1, string snapshotId2)
+    {
+        // 先尝试使用--json参数获取JSON格式输出
+        var arguments = $"diff {snapshotId1} {snapshotId2} --repo \"{repoPath}\" --json";
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
+
+        // 如果不支持--json参数，则使用默认输出
+        if (exitCode != 0 && error.Contains("--json"))
+        {
+            arguments = $"diff {snapshotId1} {snapshotId2} --repo \"{repoPath}\"";
+            (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
+        }
+
+        if (exitCode != 0)
+        {
+            _logger.LogError("比较快照差异失败: {Error}", error);
+            throw new Exception($"比较快照差异失败: {error}");
+        }
+
+        var diffResult = new SnapshotDiffResult();
+        
+        // 解析JSON Lines格式的输出
+        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            try
+            {
+                // 尝试反序列化每一行
+                using var document = JsonDocument.Parse(line);
+                var root = document.RootElement;
+                
+                if (root.TryGetProperty("message_type", out var messageTypeElement))
+                {
+                    var messageType = messageTypeElement.GetString();
+                    if (messageType == "change")
+                    {
+                        var change = JsonSerializer.Deserialize<SnapshotDiffChange>(line);
+                        diffResult.Changes.Add(change);
+                    }
+                    else if (messageType == "statistics")
+                    {
+                        diffResult.Statistics = JsonSerializer.Deserialize<SnapshotDiffStatistics>(line);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning("解析差异输出行失败: {Line}, 错误: {Error}", line, ex.Message);
+            }
+        }
+
+        _logger.LogInformation("快照差异比较成功: {SnapshotId1} vs {SnapshotId2}", snapshotId1, snapshotId2);
+        return diffResult;
+    }
+
+    public async Task RestoreSnapshotAsync(string repoPath, string password, string snapshotId, string targetPath)
+    {
+        var arguments = $"restore {snapshotId} --repo \"{repoPath}\" --target \"{targetPath}\"";
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
+
+        if (exitCode != 0)
+        {
+            _logger.LogError("恢复快照失败: {Error}", error);
+            throw new Exception($"恢复快照失败: {error}");
+        }
+
+        _logger.LogInformation("快照恢复成功: {SnapshotId} 到 {TargetPath}", snapshotId, targetPath);
+    }
+
+    public async Task RestoreFileAsync(string repoPath, string password, string snapshotId, string filePath, string restorePath)
+    {
+        var arguments = $"restore {snapshotId} --repo \"{repoPath}\" --include \"{filePath}\" --target \"{restorePath}\"";
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
+
+        if (exitCode != 0)
+        {
+            _logger.LogError("恢复文件失败: {Error}", error);
+            throw new Exception($"恢复文件失败: {error}");
+        }
+
+        _logger.LogInformation("文件恢复成功: {FilePath} 到 {RestorePath}", filePath, restorePath);
+    }
+
+    public async Task DeleteSnapshotAsync(string repoPath, string password, string snapshotId)
+    {
+        var arguments = $"forget {snapshotId} --repo \"{repoPath}\" --prune";
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
+
+        if (exitCode != 0)
+        {
+            _logger.LogError("删除快照失败: {Error}", error);
+            throw new Exception($"删除快照失败: {error}");
+        }
+
+        _logger.LogInformation("快照删除成功: {SnapshotId}", snapshotId);
+    }
+
+    public async Task PruneSnapshotsAsync(string repoPath, string password, int keepDaily, int keepWeekly, int keepMonthly)
+    {
+        var arguments = $"forget --repo \"{repoPath}\" --keep-daily {keepDaily} --keep-weekly {keepWeekly} --keep-monthly {keepMonthly} --prune";
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
+
+        if (exitCode != 0)
+        {
+            _logger.LogError("清理快照失败: {Error}", error);
+            throw new Exception($"清理快照失败: {error}");
+        }
+
+        _logger.LogInformation("快照清理成功");
+    }
+
+    public async Task<string> CheckRepositoryAsync(string repoPath, string password)
+    {
+        var arguments = $"check --repo \"{repoPath}\"";
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
+
+        if (exitCode != 0)
+        {
+            _logger.LogError("检查仓库失败: {Error}", error);
+            throw new Exception($"检查仓库失败: {error}");
+        }
+
+        _logger.LogInformation("仓库检查成功");
+        return output;
+    }
+
+    public async Task<RepositoryStats> GetStatsAsync(string repoPath, string password)
+    {
+        var arguments = $"stats --repo \"{repoPath}\" --json";
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
+
+        if (exitCode != 0)
+        {
+            _logger.LogError("获取统计信息失败: {Error}", error);
+            throw new Exception($"获取统计信息失败: {error}");
+        }
+
+        try
+        {
+            var stats = JsonSerializer.Deserialize<RepositoryStats>(output);
+            _logger.LogInformation("成功获取统计信息");
+            return stats;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError("解析统计信息失败: {Error}", ex.Message);
+            throw new Exception($"解析统计信息失败: {ex.Message}");
+        }
+    }
+
+    public async Task<bool> IsRepositoryInitializedAsync(string repoPath, string password)
+    {
+        var arguments = $"snapshots --repo \"{repoPath}\"";
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
+
+        // 如果返回码为0，说明仓库已初始化
+        var isInitialized = exitCode == 0;
+        _logger.LogInformation("仓库初始化状态检查: {IsInitialized}", isInitialized);
+        return isInitialized;
+    }
 
     /// <summary>
     /// 递归对树节点进行排序
@@ -326,12 +431,12 @@ public class ResticService : IResticService
         }
     }
 
-    public async Task RestoreSnapshotAsync(string repoPath, string password, string snapshotId, string targetPath)
+    private async Task<(string output, string error, int exitCode)> ExecuteResticCommandAsync(string arguments, params string[] inputs)
     {
         var startInfo = new ProcessStartInfo
         {
             FileName = _resticPath,
-            Arguments = $"restore {snapshotId} --repo \"{repoPath}\" --target \"{targetPath}\"",
+            Arguments = arguments,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -344,29 +449,34 @@ public class ResticService : IResticService
         using var process = new Process { StartInfo = startInfo };
         process.Start();
 
-        // 输入密码
-        await process.StandardInput.WriteLineAsync(password);
-        process.StandardInput.Close();
+        // 输入参数
+        if (inputs != null && inputs.Length > 0)
+        {
+            foreach (var input in inputs)
+            {
+                await process.StandardInput.WriteLineAsync(input);
+            }
+            process.StandardInput.Close();
+        }
 
-        var error = await process.StandardError.ReadToEndAsync();
+        var outputTask = process.StandardOutput.ReadToEndAsync();
+        var errorTask = process.StandardError.ReadToEndAsync();
 
         await process.WaitForExitAsync();
 
-        if (process.ExitCode != 0)
-        {
-            _logger.LogError("恢复快照失败: {Error}", error);
-            throw new Exception($"恢复快照失败: {error}");
-        }
+        var output = await outputTask;
+        var error = await errorTask;
 
-        _logger.LogInformation("快照恢复成功: {SnapshotId} 到 {TargetPath}", snapshotId, targetPath);
+        return (output, error, process.ExitCode);
     }
 
-    public async Task RestoreFileAsync(string repoPath, string password, string snapshotId, string filePath, string restorePath)
+
+    private async Task<(List<string> outputLines, List<string> errorLines, int exitCode)> ExecuteResticCommandWithLineOutputAsync(string arguments, params string[] inputs)
     {
         var startInfo = new ProcessStartInfo
         {
             FileName = _resticPath,
-            Arguments = $"restore {snapshotId} --repo \"{repoPath}\" --include \"{filePath}\" --target \"{restorePath}\"",
+            Arguments = arguments,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -379,201 +489,36 @@ public class ResticService : IResticService
         using var process = new Process { StartInfo = startInfo };
         process.Start();
 
-        // 输入密码
-        await process.StandardInput.WriteLineAsync(password);
-        process.StandardInput.Close();
-
-        var error = await process.StandardError.ReadToEndAsync();
-
-        await process.WaitForExitAsync();
-
-        if (process.ExitCode != 0)
+        // 输入参数
+        if (inputs != null && inputs.Length > 0)
         {
-            _logger.LogError("恢复文件失败: {Error}", error);
-            throw new Exception($"恢复文件失败: {error}");
+            foreach (var input in inputs)
+            {
+                await process.StandardInput.WriteLineAsync(input);
+            }
+            process.StandardInput.Close();
         }
 
-        _logger.LogInformation("文件恢复成功: {FilePath} 到 {RestorePath}", filePath, restorePath);
-    }
+        var outputLines = new List<string>();
+        var errorLines = new List<string>();
 
-    public async Task DeleteSnapshotAsync(string repoPath, string password, string snapshotId)
-    {
-        var startInfo = new ProcessStartInfo
+        process.OutputDataReceived += (sender, e) =>
         {
-            FileName = _resticPath,
-            Arguments = $"forget {snapshotId} --repo \"{repoPath}\" --prune",
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
+            if (!string.IsNullOrEmpty(e.Data))
+                outputLines.Add(e.Data);
         };
 
-        using var process = new Process { StartInfo = startInfo };
-        process.Start();
-
-        // 输入密码
-        await process.StandardInput.WriteLineAsync(password);
-        process.StandardInput.Close();
-
-        var error = await process.StandardError.ReadToEndAsync();
-
-        await process.WaitForExitAsync();
-
-        if (process.ExitCode != 0)
+        process.ErrorDataReceived += (sender, e) =>
         {
-            _logger.LogError("删除快照失败: {Error}", error);
-            throw new Exception($"删除快照失败: {error}");
-        }
-
-        _logger.LogInformation("快照删除成功: {SnapshotId}", snapshotId);
-    }
-
-    public async Task PruneSnapshotsAsync(string repoPath, string password, int keepDaily, int keepWeekly, int keepMonthly)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = _resticPath,
-            Arguments = $"forget --repo \"{repoPath}\" --keep-daily {keepDaily} --keep-weekly {keepWeekly} --keep-monthly {keepMonthly} --prune",
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
+            if (!string.IsNullOrEmpty(e.Data))
+                errorLines.Add(e.Data);
         };
 
-        using var process = new Process { StartInfo = startInfo };
-        process.Start();
-
-        // 输入密码
-        await process.StandardInput.WriteLineAsync(password);
-        process.StandardInput.Close();
-
-        var error = await process.StandardError.ReadToEndAsync();
+        process.BeginOutputReadLine();
+        process.BeginErrorReadLine();
 
         await process.WaitForExitAsync();
 
-        if (process.ExitCode != 0)
-        {
-            _logger.LogError("清理快照失败: {Error}", error);
-            throw new Exception($"清理快照失败: {error}");
-        }
-
-        _logger.LogInformation("快照清理成功");
-    }
-
-    public async Task<string> CheckRepositoryAsync(string repoPath, string password)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = _resticPath,
-            Arguments = $"check --repo \"{repoPath}\"",
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
-        };
-
-        using var process = new Process { StartInfo = startInfo };
-        process.Start();
-
-        // 输入密码
-        await process.StandardInput.WriteLineAsync(password);
-        process.StandardInput.Close();
-
-        var output = await process.StandardOutput.ReadToEndAsync();
-        var error = await process.StandardError.ReadToEndAsync();
-
-        await process.WaitForExitAsync();
-
-        if (process.ExitCode != 0)
-        {
-            _logger.LogError("检查仓库失败: {Error}", error);
-            throw new Exception($"检查仓库失败: {error}");
-        }
-
-        _logger.LogInformation("仓库检查成功");
-        return output;
-    }
-
-    public async Task<RepositoryStats> GetStatsAsync(string repoPath, string password)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = _resticPath,
-            Arguments = $"stats --repo \"{repoPath}\" --json",
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
-        };
-
-        using var process = new Process { StartInfo = startInfo };
-        process.Start();
-
-        // 输入密码
-        await process.StandardInput.WriteLineAsync(password);
-        process.StandardInput.Close();
-
-        var output = await process.StandardOutput.ReadToEndAsync();
-        var error = await process.StandardError.ReadToEndAsync();
-
-        await process.WaitForExitAsync();
-
-        if (process.ExitCode != 0)
-        {
-            _logger.LogError("获取统计信息失败: {Error}", error);
-            throw new Exception($"获取统计信息失败: {error}");
-        }
-
-        try
-        {
-            var stats = JsonSerializer.Deserialize<RepositoryStats>(output);
-            _logger.LogInformation("成功获取统计信息");
-            return stats;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError("解析统计信息失败: {Error}", ex.Message);
-            throw new Exception($"解析统计信息失败: {ex.Message}");
-        }
-    }
-
-    public async Task<bool> IsRepositoryInitializedAsync(string repoPath, string password)
-    {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = _resticPath,
-            Arguments = $"snapshots --repo \"{repoPath}\"",
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true
-        };
-
-        using var process = new Process { StartInfo = startInfo };
-        process.Start();
-
-        // 输入密码
-        await process.StandardInput.WriteLineAsync(password);
-        process.StandardInput.Close();
-
-        await process.WaitForExitAsync();
-
-        // 如果返回码为0，说明仓库已初始化
-        var isInitialized = process.ExitCode == 0;
-        _logger.LogInformation("仓库初始化状态检查: {IsInitialized}", isInitialized);
-        return isInitialized;
+        return (outputLines, errorLines, process.ExitCode);
     }
 }

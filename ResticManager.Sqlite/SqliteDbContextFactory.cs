@@ -17,11 +17,10 @@ public class SqliteDbContextFactory : IDesignTimeDbContextFactory<SqliteDbContex
         // 获取当前目录或指定目录加载配置
         var basePath = Directory.GetCurrentDirectory();
         var environment = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Development";
-        
+
         var builder = new ConfigurationBuilder()
             .SetBasePath(basePath)
-            .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
-            .AddJsonFile($"appsettings.{environment}.json", optional: true);
+            .AddJsonFile("data/appsettings.json", optional: false, reloadOnChange: true);
             
         var configuration = builder.Build();
 

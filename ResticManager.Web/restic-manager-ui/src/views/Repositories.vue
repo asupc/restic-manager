@@ -1,14 +1,13 @@
 <template>
     <div class="repositories-container">
         <div class="page-header">
-            <h1>仓库管理</h1>
+            <h2>仓库管理</h2>
             <div>
                 <el-button type="primary" size="small" @click="openCreateDialog" icon="el-icon-plus">
                     创建仓库
                 </el-button>
             </div>
         </div>
-
         <el-card>
             <el-table :data="repositories" style="width: 100%" v-if="repositories.length > 0">
                 <el-table-column prop="name" label="名称"></el-table-column>
@@ -30,7 +29,7 @@
                             <i class="el-icon-loading"></i> 加载中...
                         </div>
                         <div v-else-if="scope.row.isInitialized">
-                            <el-button size="mini" @click="loadStats(scope.row)" disabled>自动加载</el-button>
+                            <el-button size="mini" @click="loadStats(scope.row)">点击加载</el-button>
                         </div>
                         <div v-else>
                             <el-tag type="danger" size="mini">未初始化</el-tag>
@@ -47,7 +46,8 @@
                                    :loading="scope.row.validating">
                             验证
                         </el-button>
-                        <el-button v-if="scope.row.isInitialized" size="mini" @click="viewSnapshots(scope.row)">查看快照</el-button>
+                        <el-button v-if="scope.row.isInitialized" size="mini"
+                                   @click="viewSnapshots(scope.row)">查看快照</el-button>
                         <el-button size="mini" type="danger" @click="deleteRepository(scope.row)">删除</el-button>
                     </template>
                 </el-table-column>
@@ -213,11 +213,11 @@
             },
             // 新增方法：自动加载所有已初始化仓库的统计信息
             loadAllStats: async function () {
-                for (const repo of this.repositories) {
-                    if (repo.isInitialized && !repo.stats) {
-                        this.loadStats(repo);
-                    }
-                }
+                //for (const repo of this.repositories) {
+                //    if (repo.isInitialized && !repo.stats) {
+                //        this.loadStats(repo);
+                //    }
+                //}
             },
             viewSnapshots: function (repo) {
                 this.$router.push(`/repositories/${repo.id}/snapshots`);

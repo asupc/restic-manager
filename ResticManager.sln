@@ -1,13 +1,9 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 17
-VisualStudioVersion = 17.14.36518.9
+# Visual Studio Version 18
+VisualStudioVersion = 18.0.11205.157 d18.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ResticManager.Web", "ResticManager.Web\ResticManager.Web.csproj", "{51379793-390F-F267-2075-9B939C25E7B3}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ResticManager.MySql", "ResticManager.MySql\ResticManager.MySql.csproj", "{B0CE51A8-8949-41EF-9FDC-F4DACA24EDB7}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ResticManager.PgSql", "ResticManager.PgSql\ResticManager.PgSql.csproj", "{EC297B46-DC9F-42AD-A061-3E9EB07DD8F6}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ResticManager.Sqlite", "ResticManager.Sqlite\ResticManager.Sqlite.csproj", "{E5D8E8A1-40E3-4FA0-8E8B-E85B6CE8D8BE}"
 EndProject
@@ -19,6 +15,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ResticManager.Application",
 EndProject
 Project("{E53339B2-1760-4266-BCC7-CA923CBCF16C}") = "docker-compose", "docker-compose.dcproj", "{D809A9C5-0852-4DFF-B41E-F6D1AB2C932B}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ResticManager.PgSql", "ResticManager.PgSql\ResticManager.PgSql.csproj", "{6F7BF30D-B367-8377-82BF-2448CE467D46}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -29,14 +27,6 @@ Global
 		{51379793-390F-F267-2075-9B939C25E7B3}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{51379793-390F-F267-2075-9B939C25E7B3}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{51379793-390F-F267-2075-9B939C25E7B3}.Release|Any CPU.Build.0 = Release|Any CPU
-		{B0CE51A8-8949-41EF-9FDC-F4DACA24EDB7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{B0CE51A8-8949-41EF-9FDC-F4DACA24EDB7}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{B0CE51A8-8949-41EF-9FDC-F4DACA24EDB7}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{B0CE51A8-8949-41EF-9FDC-F4DACA24EDB7}.Release|Any CPU.Build.0 = Release|Any CPU
-		{EC297B46-DC9F-42AD-A061-3E9EB07DD8F6}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{EC297B46-DC9F-42AD-A061-3E9EB07DD8F6}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{EC297B46-DC9F-42AD-A061-3E9EB07DD8F6}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{EC297B46-DC9F-42AD-A061-3E9EB07DD8F6}.Release|Any CPU.Build.0 = Release|Any CPU
 		{E5D8E8A1-40E3-4FA0-8E8B-E85B6CE8D8BE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{E5D8E8A1-40E3-4FA0-8E8B-E85B6CE8D8BE}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{E5D8E8A1-40E3-4FA0-8E8B-E85B6CE8D8BE}.Release|Any CPU.ActiveCfg = Release|Any CPU
@@ -57,6 +47,10 @@ Global
 		{D809A9C5-0852-4DFF-B41E-F6D1AB2C932B}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D809A9C5-0852-4DFF-B41E-F6D1AB2C932B}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{D809A9C5-0852-4DFF-B41E-F6D1AB2C932B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{6F7BF30D-B367-8377-82BF-2448CE467D46}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{6F7BF30D-B367-8377-82BF-2448CE467D46}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{6F7BF30D-B367-8377-82BF-2448CE467D46}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{6F7BF30D-B367-8377-82BF-2448CE467D46}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

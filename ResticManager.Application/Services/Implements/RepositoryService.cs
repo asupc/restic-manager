@@ -150,6 +150,25 @@ public partial class RepositoryService : IRepositoryService
         return subdirectoryFiles;
     }
 
+    /// <summary>
+    /// 比较快照差异
+    /// </summary>
+    /// <param name="id">仓库ID</param>
+    /// <param name="snapshotId1">第一个快照ID</param>
+    /// <param name="snapshotId2">第二个快照ID</param>
+    /// <returns>快照差异结果</returns>
+    public async Task<SnapshotDiffResult> DiffSnapshotsAsync(int id, string snapshotId1, string snapshotId2)
+    {
+        var repository = await _context.Repositories.FindAsync(id);
+        if (repository == null)
+            throw new Exception("仓库未找到");
+
+        if (!repository.IsInitialized)
+            throw new Exception("仓库未初始化");
+
+        return await _resticService.DiffSnapshotsAsync(repository.Path, repository.Password, snapshotId1, snapshotId2);
+    }
+
     public async Task RestoreSnapshotAsync(int id, string snapshotId, string targetPath)
     {
         var repository = await _context.Repositories.FindAsync(id);

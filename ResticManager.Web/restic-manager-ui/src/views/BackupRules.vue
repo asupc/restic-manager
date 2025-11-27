@@ -1,7 +1,7 @@
 <template>
   <div class="backup-rules-container">
     <div class="page-header">
-      <h1>备份规则管理</h1>
+      <h2>备份规则管理</h2>
       <div>
         <el-button type="primary" size="small" @click="createRule" icon="el-icon-plus">
           新增规则

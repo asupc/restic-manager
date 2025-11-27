@@ -119,4 +119,18 @@ export const repositoryService = {
     );
     return response.data;
   },
+
+  /**
+   * 比较快照之间的差异
+   * @param {number} id 仓库ID
+   * @param {string} snapshotId1 第一个快照ID
+   * @param {string} snapshotId2 第二个快照ID
+   * @returns {Promise<Object>} 差异结果对象，包含changes和statistics属性
+   */
+  async diffSnapshots(id, snapshotId1, snapshotId2) {
+    const response = await api.get(
+      `/Repository/${id}/snapshots/${snapshotId1}/diff/${snapshotId2}`
+    );
+    return response.data;
+  },
 };

@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace ResticManager.Models;
+namespace ResticManager.Models.Dtos;
 
 public class ResticFileInfo
 {

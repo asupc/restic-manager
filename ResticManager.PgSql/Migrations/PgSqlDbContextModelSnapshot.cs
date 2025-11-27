@@ -22,40 +22,6 @@ namespace ResticManager.PgSql.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
-            modelBuilder.Entity("ResticManager.Models.BackupFile", b =>
-                {
-                    b.Property<int>("Id")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("integer");
-
-                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
-
-                    b.Property<int>("BackupTaskId")
-                        .HasColumnType("integer");
-
-                    b.Property<DateTime>("ModifiedAt")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.Property<string>("Path")
-                        .IsRequired()
-                        .HasColumnType("text");
-
-                    b.Property<long>("Size")
-                        .HasColumnType("bigint");
-
-                    b.Property<string>("SnapshotId")
-                        .HasColumnType("text");
-
-                    b.Property<DateTime>("SnapshotTime")
-                        .HasColumnType("timestamp with time zone");
-
-                    b.HasKey("Id");
-
-                    b.HasIndex("BackupTaskId");
-
-                    b.ToTable("BackupFile");
-                });
-
             modelBuilder.Entity("ResticManager.Models.BackupRecord", b =>
                 {
                     b.Property<int>("Id")
@@ -275,17 +241,6 @@ namespace ResticManager.PgSql.Migrations
                         .IsUnique();
 
                     b.ToTable("Users");
-                });
-
-            modelBuilder.Entity("ResticManager.Models.BackupFile", b =>
-                {
-                    b.HasOne("ResticManager.Models.BackupTask", "Task")
-                        .WithMany()
-                        .HasForeignKey("BackupTaskId")
-                        .OnDelete(DeleteBehavior.Cascade)
-                        .IsRequired();
-
-                    b.Navigation("Task");
                 });
 
             modelBuilder.Entity("ResticManager.Models.BackupRecord", b =>

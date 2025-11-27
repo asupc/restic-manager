@@ -4,7 +4,7 @@ using ResticManager.Models.Dtos;
 namespace ResticManager.Application.Services.Abstractions;
 
 /// <summary>
-/// 仓库服务接口，提供仓库的管理功能
+/// 仓库服务接口
 /// </summary>
 public interface IRepositoryService
 {
@@ -88,6 +88,15 @@ public interface IRepositoryService
     /// <returns>文件信息树形结构列表</returns>
     Task<List<ResticFileTreeNode>> ListSubdirectoryFilesInSnapshotTreeAsync(int id, string snapshotId, string path);
 
+    /// <summary>
+    /// 比较快照差异
+    /// </summary>
+    /// <param name="id">仓库ID</param>
+    /// <param name="snapshotId1">第一个快照ID</param>
+    /// <param name="snapshotId2">第二个快照ID</param>
+    /// <returns>快照差异结果</returns>
+    Task<SnapshotDiffResult> DiffSnapshotsAsync(int id, string snapshotId1, string snapshotId2);
+    
     /// <summary>
     /// 恢复快照
     /// </summary>

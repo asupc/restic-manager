@@ -1,6 +1,6 @@
 using System.Text.Json.Serialization;
 
-namespace ResticManager.Models;
+namespace ResticManager.Models.Dtos;
 
 /// <summary>
 /// 用于存储restic备份输出的摘要信息

@@ -1,12 +1,7 @@
 <template>
   <div class="home-page">
     <div class="page-header">
-      <h1>工作台</h1>
-      <!-- <div>
-        <el-button type="primary" @click="fetchDashboardData" icon="el-icon-refresh">
-          刷新
-        </el-button>
-      </div> -->
+      <h2>工作台</h2>
     </div>
 
     <!-- 统计卡片 -->
@@ -115,12 +110,12 @@
             <span>最近备份任务</span>
           </div>
           <el-table :data="recentTasks" border style="width: 100%">
-            <el-table-column prop="taskName" label="任务名称" min-width="150">
+            <el-table-column prop="name" label="任务名称" min-width="120">
               <template #default="scope">
-                <span class="task-name">{{ scope.row.taskName }}</span>
+                <span class="task-name">{{ scope.row.task.name }}</span>
               </template>
             </el-table-column>
-            <el-table-column label="状态" width="100" align="center">
+            <el-table-column label="状态" width="120" align="center">
               <template #default="scope">
                 <el-tag :type="getStatusType(scope.row.status)">
                   {{ getStatusText(scope.row.status) }}
@@ -134,11 +129,6 @@
               <template #default="scope">{{ scope.row.endTime ? formatDate(scope.row.endTime) : '-' }}</template>
             </el-table-column>
             <el-table-column prop="duration" label="耗时" width="100" align="center"></el-table-column>
-            <el-table-column label="操作" width="100" align="center">
-              <template #default="scope">
-                <el-button size="mini" type="primary" @click="viewTaskDetails(scope.row)">详情</el-button>
-              </template>
-            </el-table-column>
           </el-table>
         </el-card>
       </el-col>
@@ -299,7 +289,7 @@ export default {
 
     getStatusType(status) {
       const statusMap = {
-        'Success': 'success',
+        'Succeeded': 'success',
         'Failed': 'danger',
         'Running': 'warning',
         'Pending': 'info'
@@ -315,10 +305,6 @@ export default {
         'Pending': '待处理'
       }
       return statusMap[status] || status
-    },
-
-    viewTaskDetails(row) {
-      this.$router.push({ name: 'BackupRecords', query: { taskId: row.taskId } })
     }
   }
 }

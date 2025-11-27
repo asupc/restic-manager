@@ -1,4 +1,4 @@
-namespace ResticManager.Models;
+namespace ResticManager.Models.Dtos;
 
 public class FolderInfo
 {

@@ -5,13 +5,11 @@ import LoginPage from "@/views/LoginPage.vue";
 import RegisterPage from "@/views/RegisterPage.vue";
 import BackupTasks from "@/views/BackupTasks.vue";
 import BackupRules from "@/views/BackupRules.vue";
-import BackupRecords from "@/views/BackupRecords.vue";
-import BackupFiles from "@/views/BackupFiles.vue";
 import Repositories from "@/views/Repositories.vue";
 import RepositorySnapshots from "@/views/RepositorySnapshots.vue";
 import SnapshotFiles from "@/views/SnapshotFiles.vue";
 import BackupManagement from "@/views/BackupManagement.vue";
-import { authService } from '@/services/auth.service'
+import { authService } from "@/services/auth.service";
 
 Vue.use(VueRouter);
 
@@ -42,19 +40,9 @@ const routes = [
     component: BackupRules,
   },
   {
-    path: "/records",
-    name: "BackupRecords",
-    component: BackupRecords,
-  },
-  {
     path: "/backup-management",
     name: "BackupManagement",
     component: BackupManagement,
-  },
-  {
-    path: "/files",
-    name: "BackupFiles",
-    component: BackupFiles,
   },
   {
     path: "/repositories",
@@ -84,17 +72,17 @@ const router = new VueRouter({
 // Navigation guard
 router.beforeEach(async (to, from, next) => {
   // 检查是否已经有用户存在
-  const hasUserResponse = await authService.hasAnyUser()
-  const hasUser = hasUserResponse.hasUser
-  
+  const hasUserResponse = await authService.hasAnyUser();
+  const hasUser = hasUserResponse.hasUser;
+
   // 如果没有用户且不是去注册页面，则跳转到注册页面
-  if (!hasUser && to.path !== '/register') {
-    return next('/register')
+  if (!hasUser && to.path !== "/register") {
+    return next("/register");
   }
-  
+
   // 如果已经有用户且尝试访问注册页面，则跳转到登录页面
-  if (hasUser && to.path === '/register') {
-    return next('/login')
+  if (hasUser && to.path === "/register") {
+    return next("/login");
   }
 
   const publicPages = ["/login", "/register"];

@@ -1,17 +1,18 @@
 <template>
   <div class="backup-management-container">
     <div class="page-header">
-      <h1>备份管理</h1>
+      <h2>备份管理</h2>
     </div>
 
     <el-card class="repository-selection-card">
-      <div slot="header" class="card-header">
-        <span>选择仓库</span>
-      </div>
-      <el-select v-model="selectedRepository" placeholder="请选择仓库" @change="loadSnapshots" style="width: 100%;">
-        <el-option v-for="repo in repositories" :key="repo.id" :label="repo.name" :value="repo.id">
-        </el-option>
-      </el-select>
+      <el-row :gutter="10">
+        <el-col :span="6">
+          <el-select v-model="selectedRepository" placeholder="请选择仓库" @change="loadSnapshots" style="width: 100%;">
+            <el-option v-for="repo in repositories" :key="repo.id" :label="repo.name" :value="repo.id">
+            </el-option>
+          </el-select>
+        </el-col>
+      </el-row>
     </el-card>
 
     <div style="margin-top: 20px;">
