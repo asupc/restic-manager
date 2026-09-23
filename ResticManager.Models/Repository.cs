@@ -40,7 +40,17 @@ public class Repository : BaseModel
     /// 仓库是否已初始化
     /// </summary>
     public bool IsInitialized { get; set; } = false;
-    
+
+    /// <summary>
+    /// 最近一次成功统计的结果 JSON（持久化，页面刷新后无需重新统计）
+    /// </summary>
+    public string? StatsJson { get; set; }
+
+    /// <summary>
+    /// 最近一次成功统计的时间（UTC）
+    /// </summary>
+    public DateTime? StatsUpdatedAt { get; set; }
+
     /// <summary>
     /// 导航属性，关联到该仓库的所有备份任务
     /// </summary>

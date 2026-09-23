@@ -48,11 +48,21 @@ public class BackupRule : BaseModel
     /// 是否启用每月备份保留策略
     /// </summary>
     public bool KeepMonthly { get; set; } = true;
-    
+
     /// <summary>
     /// 每月备份保留数量
     /// </summary>
     public int KeepMonthlyCount { get; set; } = 12;
+
+    /// <summary>
+    /// 是否启用每年备份保留策略
+    /// </summary>
+    public bool KeepYearly { get; set; } = false;
+
+    /// <summary>
+    /// 每年备份保留数量
+    /// </summary>
+    public int KeepYearlyCount { get; set; } = 2;
 
     /// <summary>
     /// 规则创建时间

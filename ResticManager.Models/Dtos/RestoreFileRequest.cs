@@ -5,5 +5,6 @@
         public string SnapshotId { get; set; }
         public string FilePath { get; set; }
         public string TargetPath { get; set; }
+        public bool Verify { get; set; }
     }
 }
