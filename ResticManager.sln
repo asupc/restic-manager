@@ -1,7 +1,7 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio Version 18
-VisualStudioVersion = 18.0.11205.157 d18.0
+# Visual Studio Version 17
+VisualStudioVersion = 17.14.36518.9
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ResticManager.Web", "ResticManager.Web\ResticManager.Web.csproj", "{51379793-390F-F267-2075-9B939C25E7B3}"
 EndProject
@@ -14,8 +14,6 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ResticManager.Application", "ResticManager.Application\ResticManager.Application.csproj", "{4CE68573-6CE7-45E9-AC7B-F2FDE4EFA6AF}"
 EndProject
 Project("{E53339B2-1760-4266-BCC7-CA923CBCF16C}") = "docker-compose", "docker-compose.dcproj", "{D809A9C5-0852-4DFF-B41E-F6D1AB2C932B}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "ResticManager.PgSql", "ResticManager.PgSql\ResticManager.PgSql.csproj", "{6F7BF30D-B367-8377-82BF-2448CE467D46}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -47,10 +45,6 @@ Global
 		{D809A9C5-0852-4DFF-B41E-F6D1AB2C932B}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{D809A9C5-0852-4DFF-B41E-F6D1AB2C932B}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{D809A9C5-0852-4DFF-B41E-F6D1AB2C932B}.Release|Any CPU.Build.0 = Release|Any CPU
-		{6F7BF30D-B367-8377-82BF-2448CE467D46}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{6F7BF30D-B367-8377-82BF-2448CE467D46}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{6F7BF30D-B367-8377-82BF-2448CE467D46}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{6F7BF30D-B367-8377-82BF-2448CE467D46}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
