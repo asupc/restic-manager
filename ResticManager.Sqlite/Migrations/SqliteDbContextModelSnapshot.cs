@@ -15,7 +15,74 @@ namespace ResticManager.Sqlite.Migrations
         protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
-            modelBuilder.HasAnnotation("ProductVersion", "9.0.10");
+            modelBuilder.HasAnnotation("ProductVersion", "10.0.0");
+
+            modelBuilder.Entity("ResticManager.Models.AsyncTask", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long?>("DurationMs")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("EndTime")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Error")
+                        .HasMaxLength(4000)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ParametersJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("RepositoryId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ResultJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("StartTime")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TargetKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Trigger")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EndTime");
+
+                    b.HasIndex("Status");
+
+                    b.HasIndex("RepositoryId", "Status");
+
+                    b.ToTable("AsyncTasks");
+                });
 
             modelBuilder.Entity("ResticManager.Models.BackupRecord", b =>
                 {
@@ -95,6 +162,12 @@ namespace ResticManager.Sqlite.Migrations
                     b.Property<int>("KeepWeeklyCount")
                         .HasColumnType("INTEGER");
 
+                    b.Property<bool>("KeepYearly")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("KeepYearlyCount")
+                        .HasColumnType("INTEGER");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -106,6 +179,83 @@ namespace ResticManager.Sqlite.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("BackupRules");
+                });
+
+            modelBuilder.Entity("ResticManager.Models.BackupSnapshot", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("BackupRecordId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("Gid")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Hostname")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime?>("LastSyncedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ParentSnapshotId")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("PathsJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ProgramVersion")
+                        .HasMaxLength(50)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("RepositoryId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ShortId")
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SnapshotId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SummaryJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("TagsJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("Time")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Tree")
+                        .HasMaxLength(200)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int?>("Uid")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Username")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BackupRecordId");
+
+                    b.HasIndex("RepositoryId", "SnapshotId")
+                        .IsUnique();
+
+                    b.HasIndex("RepositoryId", "Time");
+
+                    b.ToTable("BackupSnapshots");
                 });
 
             modelBuilder.Entity("ResticManager.Models.BackupTask", b =>
@@ -164,6 +314,36 @@ namespace ResticManager.Sqlite.Migrations
                     b.ToTable("BackupTasks");
                 });
 
+            modelBuilder.Entity("ResticManager.Models.MaintenanceSetting", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("CronExpression")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("TEXT");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Type")
+                        .IsUnique();
+
+                    b.ToTable("MaintenanceSettings");
+                });
+
             modelBuilder.Entity("ResticManager.Models.Repository", b =>
                 {
                     b.Property<int>("Id")
@@ -189,6 +369,12 @@ namespace ResticManager.Sqlite.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("StatsJson")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime?>("StatsUpdatedAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Type")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -197,6 +383,45 @@ namespace ResticManager.Sqlite.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("Repositories");
+                });
+
+            modelBuilder.Entity("ResticManager.Models.RepositoryCheckRecord", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CheckedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<long>("DurationMs")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasMaxLength(4000)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Output")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("RepositoryId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Trigger")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RepositoryId", "CheckedAt");
+
+                    b.ToTable("RepositoryCheckRecords");
                 });
 
             modelBuilder.Entity("ResticManager.Models.User", b =>
@@ -228,6 +453,16 @@ namespace ResticManager.Sqlite.Migrations
                     b.ToTable("Users");
                 });
 
+            modelBuilder.Entity("ResticManager.Models.AsyncTask", b =>
+                {
+                    b.HasOne("ResticManager.Models.Repository", "Repository")
+                        .WithMany()
+                        .HasForeignKey("RepositoryId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("Repository");
+                });
+
             modelBuilder.Entity("ResticManager.Models.BackupRecord", b =>
                 {
                     b.HasOne("ResticManager.Models.BackupTask", "Task")
@@ -237,6 +472,24 @@ namespace ResticManager.Sqlite.Migrations
                         .IsRequired();
 
                     b.Navigation("Task");
+                });
+
+            modelBuilder.Entity("ResticManager.Models.BackupSnapshot", b =>
+                {
+                    b.HasOne("ResticManager.Models.BackupRecord", "BackupRecord")
+                        .WithMany()
+                        .HasForeignKey("BackupRecordId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("ResticManager.Models.Repository", "Repository")
+                        .WithMany()
+                        .HasForeignKey("RepositoryId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("BackupRecord");
+
+                    b.Navigation("Repository");
                 });
 
             modelBuilder.Entity("ResticManager.Models.BackupTask", b =>
@@ -254,6 +507,17 @@ namespace ResticManager.Sqlite.Migrations
                     b.Navigation("Repository");
 
                     b.Navigation("Rule");
+                });
+
+            modelBuilder.Entity("ResticManager.Models.RepositoryCheckRecord", b =>
+                {
+                    b.HasOne("ResticManager.Models.Repository", "Repository")
+                        .WithMany()
+                        .HasForeignKey("RepositoryId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Repository");
                 });
 
             modelBuilder.Entity("ResticManager.Models.Repository", b =>

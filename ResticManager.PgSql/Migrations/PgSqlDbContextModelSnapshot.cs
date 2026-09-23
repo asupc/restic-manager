@@ -22,6 +22,75 @@ namespace ResticManager.PgSql.Migrations
 
             NpgsqlModelBuilderExtensions.UseIdentityByDefaultColumns(modelBuilder);
 
+            modelBuilder.Entity("ResticManager.Models.AsyncTask", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<long?>("DurationMs")
+                        .HasColumnType("bigint");
+
+                    b.Property<DateTime?>("EndTime")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Error")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)");
+
+                    b.Property<string>("ParametersJson")
+                        .HasColumnType("text");
+
+                    b.Property<int?>("RepositoryId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ResultJson")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("StartTime")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("TargetKey")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<string>("Trigger")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("EndTime");
+
+                    b.HasIndex("Status");
+
+                    b.HasIndex("RepositoryId", "Status");
+
+                    b.ToTable("AsyncTasks");
+                });
+
             modelBuilder.Entity("ResticManager.Models.BackupRecord", b =>
                 {
                     b.Property<int>("Id")
@@ -104,6 +173,12 @@ namespace ResticManager.PgSql.Migrations
                     b.Property<int>("KeepWeeklyCount")
                         .HasColumnType("integer");
 
+                    b.Property<bool>("KeepYearly")
+                        .HasColumnType("boolean");
+
+                    b.Property<int>("KeepYearlyCount")
+                        .HasColumnType("integer");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(100)
@@ -115,6 +190,85 @@ namespace ResticManager.PgSql.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("BackupRules");
+                });
+
+            modelBuilder.Entity("ResticManager.Models.BackupSnapshot", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<int?>("BackupRecordId")
+                        .HasColumnType("integer");
+
+                    b.Property<int?>("Gid")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Hostname")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.Property<bool>("IsDeleted")
+                        .HasColumnType("boolean");
+
+                    b.Property<DateTime?>("LastSyncedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("ParentSnapshotId")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("PathsJson")
+                        .HasColumnType("text");
+
+                    b.Property<string>("ProgramVersion")
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<int>("RepositoryId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("ShortId")
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("SnapshotId")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)");
+
+                    b.Property<string>("SummaryJson")
+                        .HasColumnType("text");
+
+                    b.Property<string>("TagsJson")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime>("Time")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<string>("Tree")
+                        .HasMaxLength(200)
+                        .HasColumnType("character varying(200)");
+
+                    b.Property<int?>("Uid")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Username")
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("BackupRecordId");
+
+                    b.HasIndex("RepositoryId", "SnapshotId")
+                        .IsUnique();
+
+                    b.HasIndex("RepositoryId", "Time");
+
+                    b.ToTable("BackupSnapshots");
                 });
 
             modelBuilder.Entity("ResticManager.Models.BackupTask", b =>
@@ -175,6 +329,38 @@ namespace ResticManager.PgSql.Migrations
                     b.ToTable("BackupTasks");
                 });
 
+            modelBuilder.Entity("ResticManager.Models.MaintenanceSetting", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<string>("CronExpression")
+                        .IsRequired()
+                        .HasMaxLength(50)
+                        .HasColumnType("character varying(50)");
+
+                    b.Property<bool>("IsEnabled")
+                        .HasColumnType("boolean");
+
+                    b.Property<string>("Type")
+                        .IsRequired()
+                        .HasMaxLength(40)
+                        .HasColumnType("character varying(40)");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Type")
+                        .IsUnique();
+
+                    b.ToTable("MaintenanceSettings");
+                });
+
             modelBuilder.Entity("ResticManager.Models.Repository", b =>
                 {
                     b.Property<int>("Id")
@@ -202,6 +388,12 @@ namespace ResticManager.PgSql.Migrations
                         .IsRequired()
                         .HasColumnType("text");
 
+                    b.Property<string>("StatsJson")
+                        .HasColumnType("text");
+
+                    b.Property<DateTime?>("StatsUpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
                     b.Property<string>("Type")
                         .IsRequired()
                         .HasMaxLength(20)
@@ -210,6 +402,47 @@ namespace ResticManager.PgSql.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("Repositories");
+                });
+
+            modelBuilder.Entity("ResticManager.Models.RepositoryCheckRecord", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("integer");
+
+                    NpgsqlPropertyBuilderExtensions.UseIdentityByDefaultColumn(b.Property<int>("Id"));
+
+                    b.Property<DateTime>("CheckedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<long>("DurationMs")
+                        .HasColumnType("bigint");
+
+                    b.Property<string>("ErrorMessage")
+                        .HasMaxLength(4000)
+                        .HasColumnType("character varying(4000)");
+
+                    b.Property<string>("Output")
+                        .HasColumnType("text");
+
+                    b.Property<int>("RepositoryId")
+                        .HasColumnType("integer");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.Property<string>("Trigger")
+                        .IsRequired()
+                        .HasMaxLength(20)
+                        .HasColumnType("character varying(20)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("RepositoryId", "CheckedAt");
+
+                    b.ToTable("RepositoryCheckRecords");
                 });
 
             modelBuilder.Entity("ResticManager.Models.User", b =>
@@ -243,6 +476,16 @@ namespace ResticManager.PgSql.Migrations
                     b.ToTable("Users");
                 });
 
+            modelBuilder.Entity("ResticManager.Models.AsyncTask", b =>
+                {
+                    b.HasOne("ResticManager.Models.Repository", "Repository")
+                        .WithMany()
+                        .HasForeignKey("RepositoryId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("Repository");
+                });
+
             modelBuilder.Entity("ResticManager.Models.BackupRecord", b =>
                 {
                     b.HasOne("ResticManager.Models.BackupTask", "Task")
@@ -252,6 +495,24 @@ namespace ResticManager.PgSql.Migrations
                         .IsRequired();
 
                     b.Navigation("Task");
+                });
+
+            modelBuilder.Entity("ResticManager.Models.BackupSnapshot", b =>
+                {
+                    b.HasOne("ResticManager.Models.BackupRecord", "BackupRecord")
+                        .WithMany()
+                        .HasForeignKey("BackupRecordId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("ResticManager.Models.Repository", "Repository")
+                        .WithMany()
+                        .HasForeignKey("RepositoryId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("BackupRecord");
+
+                    b.Navigation("Repository");
                 });
 
             modelBuilder.Entity("ResticManager.Models.BackupTask", b =>
@@ -269,6 +530,17 @@ namespace ResticManager.PgSql.Migrations
                     b.Navigation("Repository");
 
                     b.Navigation("Rule");
+                });
+
+            modelBuilder.Entity("ResticManager.Models.RepositoryCheckRecord", b =>
+                {
+                    b.HasOne("ResticManager.Models.Repository", "Repository")
+                        .WithMany()
+                        .HasForeignKey("RepositoryId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.Navigation("Repository");
                 });
 
             modelBuilder.Entity("ResticManager.Models.Repository", b =>
