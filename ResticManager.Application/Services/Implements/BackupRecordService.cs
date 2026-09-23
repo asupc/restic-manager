@@ -1,7 +1,8 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using ResticManager.Application.Services.Abstractions;
 using ResticManager.Data;
 using ResticManager.Models;
+using ResticManager.Models.Dtos;
 
 namespace ResticManager.Application.Services.Implements;
 
@@ -24,6 +25,76 @@ public class BackupRecordService : IBackupRecordService
             .Where(r => r.BackupTaskId == taskId)
             .OrderByDescending(r => r.StartTime) // 按时间倒序（最新的在前）
             .ToListAsync();
+    }
+
+    /// <summary>
+    /// 分页获取指定任务的备份记录
+    /// </summary>
+    public async Task<PagedResult<BackupRecord>> GetPagedRecordsByTaskIdAsync(int taskId, int page, int pageSize)
+    {
+        if (page < 1) page = 1;
+        if (pageSize < 1) pageSize = 10;
+
+        var query = _context.BackupRecords
+            .Where(r => r.BackupTaskId == taskId);
+
+        var total = await query.CountAsync();
+        var items = await query
+            .OrderByDescending(r => r.StartTime)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync();
+
+        return new PagedResult<BackupRecord>
+        {
+            Items = items,
+            Total = total,
+            Page = page,
+            PageSize = pageSize
+        };
+    }
+
+    /// <summary>
+    /// 多条件分页获取备份记录
+    /// </summary>
+    public async Task<PagedResult<BackupRecord>> GetPagedRecordsAsync(int page, int pageSize, int? taskId = null, string? status = null, string? keyword = null)
+    {
+        if (page < 1) page = 1;
+        if (pageSize < 1) pageSize = 10;
+
+        var query = _context.BackupRecords
+            .Include(r => r.Task)
+            .AsQueryable();
+
+        if (taskId.HasValue && taskId.Value > 0)
+        {
+            query = query.Where(r => r.BackupTaskId == taskId.Value);
+        }
+
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            query = query.Where(r => r.Status == status);
+        }
+
+        if (!string.IsNullOrWhiteSpace(keyword))
+        {
+            query = query.Where(r => (r.Task != null && r.Task.Name.Contains(keyword)) || r.Error.Contains(keyword));
+        }
+
+        var total = await query.CountAsync();
+        var items = await query
+            .OrderByDescending(r => r.StartTime)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync();
+
+        return new PagedResult<BackupRecord>
+        {
+            Items = items,
+            Total = total,
+            Page = page,
+            PageSize = pageSize
+        };
     }
 
     /// <summary>

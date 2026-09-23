@@ -39,7 +39,7 @@ public class ResticService : IResticService
         _logger.LogInformation("仓库初始化成功: {RepoPath}", repoPath);
     }
 
-    public async Task<BackupResult> CreateBackupAsync(string sourcePath, string repoPath, string password, string includePatterns = null, string excludePatterns = null)
+    public async Task<BackupResult> CreateBackupAsync(string sourcePath, string repoPath, string password, string includePatterns = null, string excludePatterns = null, BackupOptions options = null)
     {
         var args = $"backup \"{sourcePath}\" --repo \"{repoPath}\" --json";
 
@@ -58,6 +58,33 @@ public class ResticService : IResticService
             foreach (var pattern in patterns)
             {
                 args += $" --exclude \"{pattern.Trim()}\"";
+            }
+        }
+
+        if (options != null)
+        {
+            if (options.Tags != null)
+            {
+                foreach (var tag in options.Tags.Where(t => !string.IsNullOrWhiteSpace(t)))
+                {
+                    args += $" --tag \"{tag.Trim()}\"";
+                }
+            }
+            if (options.ExcludeCaches)
+            {
+                args += " --exclude-caches";
+            }
+            if (!string.IsNullOrWhiteSpace(options.ExcludeLargerThan))
+            {
+                args += $" --exclude-larger-than {options.ExcludeLargerThan.Trim()}";
+            }
+            if (options.OneFileSystem)
+            {
+                args += " --one-file-system";
+            }
+            if (options.DryRun)
+            {
+                args += " --dry-run";
             }
         }
 
@@ -124,6 +151,49 @@ public class ResticService : IResticService
         {
             _logger.LogError("解析快照列表失败: {Error}", ex.Message);
             throw new Exception($"解析快照列表失败: {ex.Message}");
+        }
+    }
+
+    public async Task<List<SnapshotInfo>> ListSnapshotsByIdsAsync(string repoPath, string password, IEnumerable<string> ids)
+    {
+        if (ids == null)
+            throw new ArgumentNullException(nameof(ids));
+
+        // 过滤掉空 ID
+        var idList = ids.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct().ToList();
+        if (idList.Count == 0)
+            return new List<SnapshotInfo>();
+
+        // 快照 ID 只能是 4~64 位十六进制（完整 ID 64 位，前缀最短 4 位），
+        // 拒绝其余字符，防止通过路由传入的 snapshotId 拼进命令行注入 restic 参数
+        foreach (var id in idList)
+        {
+            if (!System.Text.RegularExpressions.Regex.IsMatch(id, "^[a-fA-F0-9]{4,64}$"))
+                throw new ArgumentException($"非法的快照 ID: {id}", nameof(ids));
+        }
+
+        // restic 0.18.1: `snapshots <id1> <id2> ... --json` 支持按 ID 过滤
+        var idArgs = string.Join(" ", idList.Select(id => $"\"{id}\""));
+        var arguments = $"snapshots --repo \"{repoPath}\" --json {idArgs}";
+
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
+
+        if (exitCode != 0)
+        {
+            _logger.LogError("按ID获取快照失败: {Error}", error);
+            throw new Exception($"按ID获取快照失败: {error}");
+        }
+
+        try
+        {
+            var snapshots = JsonSerializer.Deserialize<List<SnapshotInfo>>(output);
+            _logger.LogInformation("按ID获取快照成功，共 {Count} 条", snapshots?.Count ?? 0);
+            return snapshots ?? new List<SnapshotInfo>();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError("解析按ID快照列表失败: {Error}", ex.Message);
+            throw new Exception($"解析按ID快照列表失败: {ex.Message}");
         }
     }
 
@@ -296,9 +366,13 @@ public class ResticService : IResticService
         return diffResult;
     }
 
-    public async Task RestoreSnapshotAsync(string repoPath, string password, string snapshotId, string targetPath)
+    public async Task RestoreSnapshotAsync(string repoPath, string password, string snapshotId, string targetPath, bool verify = false)
     {
         var arguments = $"restore {snapshotId} --repo \"{repoPath}\" --target \"{targetPath}\"";
+        if (verify)
+        {
+            arguments += " --verify";
+        }
         var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
 
         if (exitCode != 0)
@@ -310,9 +384,13 @@ public class ResticService : IResticService
         _logger.LogInformation("快照恢复成功: {SnapshotId} 到 {TargetPath}", snapshotId, targetPath);
     }
 
-    public async Task RestoreFileAsync(string repoPath, string password, string snapshotId, string filePath, string restorePath)
+    public async Task RestoreFileAsync(string repoPath, string password, string snapshotId, string filePath, string restorePath, bool verify = false)
     {
         var arguments = $"restore {snapshotId} --repo \"{repoPath}\" --include \"{filePath}\" --target \"{restorePath}\"";
+        if (verify)
+        {
+            arguments += " --verify";
+        }
         var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
 
         if (exitCode != 0)
@@ -326,6 +404,11 @@ public class ResticService : IResticService
 
     public async Task DeleteSnapshotAsync(string repoPath, string password, string snapshotId)
     {
+        // 与批量删除/ListSnapshotsByIdsAsync 一致：只接受 4~64 位十六进制，防止命令行注入
+        if (string.IsNullOrWhiteSpace(snapshotId) ||
+            !System.Text.RegularExpressions.Regex.IsMatch(snapshotId, "^[a-fA-F0-9]{4,64}$"))
+            throw new ArgumentException($"非法的快照 ID: {snapshotId}", nameof(snapshotId));
+
         var arguments = $"forget {snapshotId} --repo \"{repoPath}\" --prune";
         var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
 
@@ -335,12 +418,68 @@ public class ResticService : IResticService
             throw new Exception($"删除快照失败: {error}");
         }
 
+        // restic forget 对未匹配到任何快照的 ID 也以退出码 0 结束（仅在 stderr 打印
+        // "Ignoring ..."），仅凭退出码会把"什么都没删"误判为删除成功。
+        // 删后按 ID 回查远端，确认快照确实消失。
+        var remaining = await ListSnapshotsByIdsAsync(repoPath, password, new[] { snapshotId });
+        if (remaining.Count > 0)
+        {
+            _logger.LogError("删除快照失败: 快照 {SnapshotId} 仍在远端仓库中（本地缓存可能与远端不同步）", snapshotId);
+            throw new Exception("删除快照失败: 快照仍在远端仓库中，本地缓存可能与远端不同步，请先\"同步远端\"后重试");
+        }
+
         _logger.LogInformation("快照删除成功: {SnapshotId}", snapshotId);
     }
 
-    public async Task PruneSnapshotsAsync(string repoPath, string password, int keepDaily, int keepWeekly, int keepMonthly)
+    public async Task DeleteSnapshotsAsync(string repoPath, string password, IEnumerable<string> snapshotIds)
     {
-        var arguments = $"forget --repo \"{repoPath}\" --keep-daily {keepDaily} --keep-weekly {keepWeekly} --keep-monthly {keepMonthly} --prune";
+        if (snapshotIds == null)
+            throw new ArgumentNullException(nameof(snapshotIds));
+
+        // 过滤空 ID 并去重
+        var idList = snapshotIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct().ToList();
+        if (idList.Count == 0)
+            throw new ArgumentException("快照ID不能为空", nameof(snapshotIds));
+
+        // 与 ListSnapshotsByIdsAsync 一致：只接受 4~64 位十六进制，防止命令行注入
+        foreach (var id in idList)
+        {
+            if (!System.Text.RegularExpressions.Regex.IsMatch(id, "^[a-fA-F0-9]{4,64}$"))
+                throw new ArgumentException($"非法的快照 ID: {id}", nameof(snapshotIds));
+        }
+
+        // restic forget 原生支持一次传入多个快照 ID
+        var idArgs = string.Join(" ", idList.Select(id => $"\"{id}\""));
+        var arguments = $"forget {idArgs} --repo \"{repoPath}\" --prune";
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
+
+        if (exitCode != 0)
+        {
+            _logger.LogError("批量删除快照失败: {Error}", error);
+            throw new Exception($"批量删除快照失败: {error}");
+        }
+
+        // 同 DeleteSnapshotAsync：restic 对未匹配的 ID 静默忽略且退出码为 0，删后回查确认全部消失
+        var remaining = await ListSnapshotsByIdsAsync(repoPath, password, idList);
+        if (remaining.Count > 0)
+        {
+            var remainIds = string.Join(", ", remaining.Select(s => s.Id));
+            _logger.LogError("批量删除快照失败: 以下快照仍在远端仓库中: {SnapshotIds}", remainIds);
+            throw new Exception($"批量删除快照失败: {remainIds} 仍在远端仓库中，本地缓存可能与远端不同步，请先\"同步远端\"后重试");
+        }
+
+        _logger.LogInformation("批量删除快照成功，共 {Count} 条", idList.Count);
+    }
+
+    public async Task PruneSnapshotsAsync(string repoPath, string password, int keepDaily, int keepWeekly, int keepMonthly, int? keepYearly)
+    {
+        var arguments = $"forget --repo \"{repoPath}\" --keep-daily {keepDaily} --keep-weekly {keepWeekly} --keep-monthly {keepMonthly}";
+        if (keepYearly.HasValue && keepYearly.Value > 0)
+        {
+            arguments += $" --keep-yearly {keepYearly.Value}";
+        }
+        arguments += " --prune";
+
         var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
 
         if (exitCode != 0)
@@ -352,9 +491,13 @@ public class ResticService : IResticService
         _logger.LogInformation("快照清理成功");
     }
 
-    public async Task<string> CheckRepositoryAsync(string repoPath, string password)
+    public async Task<string> CheckRepositoryAsync(string repoPath, string password, string readDataSubset = null)
     {
         var arguments = $"check --repo \"{repoPath}\"";
+        if (!string.IsNullOrWhiteSpace(readDataSubset))
+        {
+            arguments += $" --read-data-subset={readDataSubset.Trim()}";
+        }
         var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
 
         if (exitCode != 0)
@@ -400,6 +543,137 @@ public class ResticService : IResticService
         var isInitialized = exitCode == 0;
         _logger.LogInformation("仓库初始化状态检查: {IsInitialized}", isInitialized);
         return isInitialized;
+    }
+
+    public async Task<string> UnlockRepositoryAsync(string repoPath, string password, bool removeAll = false)
+    {
+        var arguments = $"unlock --repo \"{repoPath}\"";
+        if (removeAll)
+        {
+            arguments += " --remove-all";
+        }
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
+
+        if (exitCode != 0)
+        {
+            _logger.LogError("解锁仓库失败: {Error}", error);
+            throw new Exception($"解锁仓库失败: {error}");
+        }
+
+        _logger.LogInformation("仓库解锁成功: {RepoPath}", repoPath);
+        return string.IsNullOrWhiteSpace(output) ? "解锁成功" : output;
+    }
+
+    public async Task<string> PruneRepositoryAsync(string repoPath, string password)
+    {
+        var arguments = $"prune --repo \"{repoPath}\"";
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
+
+        if (exitCode != 0)
+        {
+            _logger.LogError("清理仓库失败: {Error}", error);
+            throw new Exception($"清理仓库失败: {error}");
+        }
+
+        _logger.LogInformation("仓库清理成功: {RepoPath}", repoPath);
+        return output;
+    }
+
+    public async Task<string> RepairIndexAsync(string repoPath, string password)
+    {
+        var arguments = $"repair index --repo \"{repoPath}\"";
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
+
+        if (exitCode != 0)
+        {
+            _logger.LogError("修复索引失败: {Error}", error);
+            throw new Exception($"修复索引失败: {error}");
+        }
+
+        _logger.LogInformation("索引修复成功: {RepoPath}", repoPath);
+        return output;
+    }
+
+    public async Task<string> RepairSnapshotsAsync(string repoPath, string password)
+    {
+        var arguments = $"repair snapshots --repo \"{repoPath}\" --forget";
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
+
+        if (exitCode != 0)
+        {
+            _logger.LogError("修复快照失败: {Error}", error);
+            throw new Exception($"修复快照失败: {error}");
+        }
+
+        _logger.LogInformation("快照修复成功: {RepoPath}", repoPath);
+        return output;
+    }
+
+    public async Task DumpFileAsync(string repoPath, string password, string snapshotId, string filePath, Stream output)
+    {
+        var arguments = $"dump {snapshotId} \"{filePath}\" --repo \"{repoPath}\"";
+        var (error, exitCode) = await ExecuteResticCommandToStreamAsync(arguments, output, password);
+
+        if (exitCode != 0)
+        {
+            _logger.LogError("导出文件失败: {Error}", error);
+            throw new Exception($"导出文件失败: {error}");
+        }
+
+        _logger.LogInformation("文件导出成功: {FilePath}", filePath);
+    }
+
+    public async Task<List<FindResult>> FindInSnapshotsAsync(string repoPath, string password, string pattern)
+    {
+        if (string.IsNullOrWhiteSpace(pattern))
+            throw new ArgumentException("搜索模式不能为空", nameof(pattern));
+
+        var arguments = $"find \"{pattern}\" --repo \"{repoPath}\" --json";
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
+
+        if (exitCode != 0)
+        {
+            _logger.LogError("搜索文件失败: {Error}", error);
+            throw new Exception($"搜索文件失败: {error}");
+        }
+
+        if (string.IsNullOrWhiteSpace(output))
+        {
+            return new List<FindResult>();
+        }
+
+        try
+        {
+            var results = JsonSerializer.Deserialize<List<FindResult>>(output);
+            return (results ?? new List<FindResult>()).Where(r => r.Hits > 0).ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError("解析搜索结果失败: {Error}", ex.Message);
+            throw new Exception($"解析搜索结果失败: {ex.Message}");
+        }
+    }
+
+    public async Task SetSnapshotTagsAsync(string repoPath, string password, string snapshotId, List<string> tags)
+    {
+        if (string.IsNullOrWhiteSpace(snapshotId))
+            throw new ArgumentException("快照ID不能为空", nameof(snapshotId));
+
+        // --set 传空字符串表示清除全部标签
+        var tagValue = tags == null || tags.Count == 0
+            ? string.Empty
+            : string.Join(",", tags.Select(t => t.Trim()).Where(t => !string.IsNullOrEmpty(t)));
+
+        var arguments = $"tag {snapshotId} --repo \"{repoPath}\" --set \"{tagValue}\"";
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(arguments, password);
+
+        if (exitCode != 0)
+        {
+            _logger.LogError("设置快照标签失败: {Error}", error);
+            throw new Exception($"设置快照标签失败: {error}");
+        }
+
+        _logger.LogInformation("快照标签设置成功: {SnapshotId}", snapshotId);
     }
 
     /// <summary>
@@ -520,5 +794,46 @@ public class ResticService : IResticService
         await process.WaitForExitAsync();
 
         return (outputLines, errorLines, process.ExitCode);
+    }
+
+    /// <summary>
+    /// 执行 restic 命令并把标准输出的原始字节流复制到目标流（用于 dump 等二进制输出，
+    /// 避免 UTF-8 解码破坏二进制内容）。返回标准错误文本与退出码。
+    /// </summary>
+    private async Task<(string error, int exitCode)> ExecuteResticCommandToStreamAsync(string arguments, Stream output, params string[] inputs)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = _resticPath,
+            Arguments = arguments,
+            RedirectStandardInput = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            StandardErrorEncoding = Encoding.UTF8
+        };
+
+        using var process = new Process { StartInfo = startInfo };
+        process.Start();
+
+        // 输入参数（密码）
+        if (inputs != null && inputs.Length > 0)
+        {
+            foreach (var input in inputs)
+            {
+                await process.StandardInput.WriteLineAsync(input);
+            }
+            process.StandardInput.Close();
+        }
+
+        // 并发读取标准错误，避免缓冲区写满导致死锁
+        var errorTask = process.StandardError.ReadToEndAsync();
+        var copyTask = process.StandardOutput.BaseStream.CopyToAsync(output);
+
+        await Task.WhenAll(copyTask, errorTask);
+        await process.WaitForExitAsync();
+
+        return (await errorTask, process.ExitCode);
     }
 }

@@ -1,3 +1,4 @@
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Quartz;
@@ -13,11 +14,13 @@ namespace ResticManager.Application.Services.Implements;
 public class QuartzSchedulerService : IHostedService
 {
     private readonly IServiceProvider _serviceProvider;
+    private readonly IConfiguration _configuration;
     private IScheduler _scheduler;
 
-    public QuartzSchedulerService(IServiceProvider serviceProvider)
+    public QuartzSchedulerService(IServiceProvider serviceProvider, IConfiguration configuration)
     {
         _serviceProvider = serviceProvider;
+        _configuration = configuration;
     }
 
     private async Task InitScheduler()
@@ -34,7 +37,7 @@ public class QuartzSchedulerService : IHostedService
         StdSchedulerFactory factory = new(props);
 
         _scheduler = await factory.GetScheduler();
-        
+
         // 设置自定义的 JobFactory 以支持依赖注入
         _scheduler.JobFactory = new ServiceJobFactory(_serviceProvider);
     }
@@ -49,6 +52,10 @@ public class QuartzSchedulerService : IHostedService
 
         // 注册任务和触发器
         await ScheduleAllTasks(cancellationToken);
+        // 注册系统级健康检查任务
+        await ScheduleHealthCheckJob(cancellationToken);
+        // 注册定时维护任务（按设置页配置）
+        await ScheduleMaintenanceSettings(cancellationToken);
         Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 所有任务调度完成");
     }
 
@@ -158,6 +165,131 @@ public class QuartzSchedulerService : IHostedService
         {
             await ScheduleTask(task, cancellationToken);
         }
+    }
+
+    /// <summary>
+    /// 注册系统级仓库健康检查 Job。默认每天凌晨 3 点执行，
+    /// 可通过 appsettings.json 的 "HealthCheck:Cron" 覆盖。
+    /// </summary>
+    private async Task ScheduleHealthCheckJob(CancellationToken cancellationToken)
+    {
+        await InitScheduler();
+
+        var cron = _configuration["HealthCheck:Cron"] ?? "0 0 3 * * ?";
+        if (!CronExpression.IsValidExpression(cron))
+        {
+            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 健康检查 Cron 表达式无效，使用默认值: {cron}");
+            cron = "0 0 3 * * ?";
+        }
+
+        var jobKey = new JobKey(RepositoryHealthCheckJob.JobKeyName);
+        var jobDetail = JobBuilder.Create<RepositoryHealthCheckJob>()
+            .WithIdentity(jobKey)
+            .Build();
+
+        var triggerKey = new TriggerKey($"{RepositoryHealthCheckJob.JobKeyName}_Trigger");
+        var trigger = TriggerBuilder.Create()
+            .WithIdentity(triggerKey)
+            .WithCronSchedule(cron, x => x.InTimeZone(TimeZoneInfo.Local))
+            .Build();
+
+        if (await _scheduler.CheckExists(jobKey, cancellationToken))
+        {
+            await _scheduler.DeleteJob(jobKey, cancellationToken);
+        }
+        await _scheduler.ScheduleJob(jobDetail, trigger, cancellationToken);
+
+        var nextFireTime = trigger.GetNextFireTimeUtc();
+        Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 仓库健康检查 Job 已注册，Cron：{cron}，下次执行：{nextFireTime?.ToLocalTime()}");
+    }
+
+    /// <summary>
+    /// 启动时初始化维护配置种子并注册所有启用的定时维护 Job。
+    /// </summary>
+    private async Task ScheduleMaintenanceSettings(CancellationToken cancellationToken)
+    {
+        try
+        {
+            using var scope = _serviceProvider.CreateScope();
+            var settingService = scope.ServiceProvider.GetRequiredService<IMaintenanceSettingService>();
+            await settingService.EnsureSeededAsync();
+
+            var settings = await settingService.GetAllAsync();
+            foreach (var setting in settings.Where(s => s.IsEnabled))
+            {
+                await ScheduleMaintenanceSetting(setting, cancellationToken);
+            }
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 调度定时维护任务时发生错误: {ex.Message}");
+            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 异常详情: {ex}");
+        }
+    }
+
+    /// <summary>
+    /// 注册单个维护类型的 Job，JobKey/TriggerKey 以类型区分。
+    /// </summary>
+    private async Task ScheduleMaintenanceSetting(MaintenanceSetting setting, CancellationToken cancellationToken)
+    {
+        await InitScheduler();
+
+        if (!CronExpression.IsValidExpression(setting.CronExpression))
+        {
+            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 维护任务 {setting.Type} 的 Cron 表达式无效: {setting.CronExpression}，跳过调度");
+            return;
+        }
+
+        var jobKey = new JobKey($"MaintenanceJob_{setting.Type}");
+        var jobDetail = JobBuilder.Create<MaintenanceJob>()
+            .WithIdentity(jobKey)
+            .UsingJobData("type", setting.Type)
+            .Build();
+
+        var triggerKey = new TriggerKey($"MaintenanceTrigger_{setting.Type}");
+        var trigger = TriggerBuilder.Create()
+            .WithIdentity(triggerKey)
+            .WithCronSchedule(setting.CronExpression, x => x.InTimeZone(TimeZoneInfo.Local))
+            .Build();
+
+        if (await _scheduler.CheckExists(jobKey, cancellationToken))
+        {
+            await _scheduler.DeleteJob(jobKey, cancellationToken);
+        }
+        await _scheduler.ScheduleJob(jobDetail, trigger, cancellationToken);
+
+        var nextFireTime = trigger.GetNextFireTimeUtc();
+        Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 定时维护 {setting.Type} 已注册，Cron：{setting.CronExpression}，下次执行：{nextFireTime?.ToLocalTime()}");
+    }
+
+    /// <summary>
+    /// 设置更新后重调度单个维护类型（先移除旧调度，启用且表达式有效时重新注册）。
+    /// </summary>
+    public async Task RescheduleMaintenanceSetting(MaintenanceSetting setting, CancellationToken cancellationToken)
+    {
+        await InitScheduler();
+
+        var jobKey = new JobKey($"MaintenanceJob_{setting.Type}");
+        if (await _scheduler.CheckExists(jobKey, cancellationToken))
+        {
+            await _scheduler.DeleteJob(jobKey, cancellationToken);
+        }
+
+        if (setting.IsEnabled && CronExpression.IsValidExpression(setting.CronExpression))
+        {
+            await ScheduleMaintenanceSetting(setting, cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// 查询某个维护类型下一次触发时间（UTC）；未启用或未调度返回 null。
+    /// </summary>
+    public async Task<DateTime?> GetNextFireTimeAsync(string type, CancellationToken cancellationToken)
+    {
+        await InitScheduler();
+
+        var trigger = await _scheduler.GetTrigger(new TriggerKey($"MaintenanceTrigger_{type}"), cancellationToken);
+        return trigger?.GetNextFireTimeUtc()?.UtcDateTime;
     }
 }
 

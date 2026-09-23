@@ -4,6 +4,7 @@ using ResticManager.Application.Utils;
 using ResticManager.Data;
 using ResticManager.Models;
 using ResticManager.Models.Dtos;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 // 添加 EFCore.BulkExtensions 引用
 // using EFCore.BulkExtensions; // 不再需要这个引用
@@ -46,11 +47,20 @@ public partial class RepositoryService : IRepositoryService
         var existingRepo = await _context.Repositories.FindAsync(id);
         if (existingRepo == null) return null;
 
+        // 路径变了等于换了一个仓库，旧统计不再有效
+        var pathChanged = existingRepo.Path != repository.Path;
+
         existingRepo.Name = repository.Name;
         existingRepo.Path = repository.Path;
         existingRepo.Password = repository.Password;
         existingRepo.Type = repository.Type;
         existingRepo.IsInitialized = repository.IsInitialized;
+
+        if (pathChanged)
+        {
+            existingRepo.StatsJson = null;
+            existingRepo.StatsUpdatedAt = null;
+        }
 
         await _context.SaveChangesAsync();
         return existingRepo;
@@ -102,7 +112,14 @@ public partial class RepositoryService : IRepositoryService
         if (!repository.IsInitialized)
             throw new Exception("仓库未初始化");
 
-        return await _resticService.GetStatsAsync(repository.Path, repository.Password);
+        var stats = await _resticService.GetStatsAsync(repository.Path, repository.Password);
+
+        // 统计结果持久化到仓库行，页面刷新后直接展示，无需重新统计
+        repository.StatsJson = JsonSerializer.Serialize(stats);
+        repository.StatsUpdatedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+
+        return stats;
     }
 
     public async Task<List<SnapshotInfo>> ListSnapshotsAsync(int id)
@@ -169,7 +186,7 @@ public partial class RepositoryService : IRepositoryService
         return await _resticService.DiffSnapshotsAsync(repository.Path, repository.Password, snapshotId1, snapshotId2);
     }
 
-    public async Task RestoreSnapshotAsync(int id, string snapshotId, string targetPath)
+    public async Task RestoreSnapshotAsync(int id, string snapshotId, string targetPath, bool verify = false)
     {
         var repository = await _context.Repositories.FindAsync(id);
         if (repository == null)
@@ -178,10 +195,10 @@ public partial class RepositoryService : IRepositoryService
         if (!repository.IsInitialized)
             throw new Exception("仓库未初始化");
 
-        await _resticService.RestoreSnapshotAsync(repository.Path, repository.Password, snapshotId, targetPath);
+        await _resticService.RestoreSnapshotAsync(repository.Path, repository.Password, snapshotId, targetPath, verify);
     }
 
-    public async Task RestoreFileAsync(int id, string snapshotId, string filePath, string targetPath)
+    public async Task RestoreFileAsync(int id, string snapshotId, string filePath, string targetPath, bool verify = false)
     {
         var repository = await _context.Repositories.FindAsync(id);
         if (repository == null)
@@ -190,7 +207,7 @@ public partial class RepositoryService : IRepositoryService
         if (!repository.IsInitialized)
             throw new Exception("仓库未初始化");
 
-        await _resticService.RestoreFileAsync(repository.Path, repository.Password, snapshotId, filePath, targetPath);
+        await _resticService.RestoreFileAsync(repository.Path, repository.Password, snapshotId, filePath, targetPath, verify);
     }
 
     public async Task DeleteSnapshotAsync(int id, string snapshotId)
@@ -206,6 +223,81 @@ public partial class RepositoryService : IRepositoryService
             throw new ArgumentException("快照ID不能为空", nameof(snapshotId));
 
         await _resticService.DeleteSnapshotAsync(repository.Path, repository.Password, snapshotId);
+    }
+
+    public async Task DeleteSnapshotsAsync(int id, IEnumerable<string> snapshotIds)
+    {
+        var repository = await _context.Repositories.FindAsync(id);
+        if (repository == null)
+            throw new Exception("仓库未找到");
+
+        if (!repository.IsInitialized)
+            throw new Exception("仓库未初始化");
+
+        await _resticService.DeleteSnapshotsAsync(repository.Path, repository.Password, snapshotIds);
+    }
+
+    public async Task<string> UnlockRepositoryAsync(int id, bool removeAll = false)
+    {
+        var repository = await GetInitializedRepositoryAsync(id);
+        return await _resticService.UnlockRepositoryAsync(repository.Path, repository.Password, removeAll);
+    }
+
+    public async Task<string> PruneRepositoryAsync(int id)
+    {
+        var repository = await GetInitializedRepositoryAsync(id);
+        return await _resticService.PruneRepositoryAsync(repository.Path, repository.Password);
+    }
+
+    public async Task<string> RepairIndexAsync(int id)
+    {
+        var repository = await GetInitializedRepositoryAsync(id);
+        return await _resticService.RepairIndexAsync(repository.Path, repository.Password);
+    }
+
+    public async Task<string> RepairSnapshotsAsync(int id)
+    {
+        var repository = await GetInitializedRepositoryAsync(id);
+        return await _resticService.RepairSnapshotsAsync(repository.Path, repository.Password);
+    }
+
+    public async Task<string> DeepCheckRepositoryAsync(int id, string readDataSubset)
+    {
+        var repository = await GetInitializedRepositoryAsync(id);
+        return await _resticService.CheckRepositoryAsync(repository.Path, repository.Password, readDataSubset);
+    }
+
+    public async Task DumpFileAsync(int id, string snapshotId, string filePath, Stream output)
+    {
+        var repository = await GetInitializedRepositoryAsync(id);
+        await _resticService.DumpFileAsync(repository.Path, repository.Password, snapshotId, filePath, output);
+    }
+
+    public async Task<List<FindResult>> FindInSnapshotsAsync(int id, string pattern)
+    {
+        var repository = await GetInitializedRepositoryAsync(id);
+        return await _resticService.FindInSnapshotsAsync(repository.Path, repository.Password, pattern);
+    }
+
+    public async Task SetSnapshotTagsAsync(int id, string snapshotId, List<string> tags)
+    {
+        var repository = await GetInitializedRepositoryAsync(id);
+        await _resticService.SetSnapshotTagsAsync(repository.Path, repository.Password, snapshotId, tags);
+    }
+
+    /// <summary>
+    /// 获取已初始化的仓库，未找到或未初始化时抛出异常
+    /// </summary>
+    private async Task<Repository> GetInitializedRepositoryAsync(int id)
+    {
+        var repository = await _context.Repositories.FindAsync(id);
+        if (repository == null)
+            throw new Exception("仓库未找到");
+
+        if (!repository.IsInitialized)
+            throw new Exception("仓库未初始化");
+
+        return repository;
     }
 
     /// <summary>
