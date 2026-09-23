@@ -84,7 +84,6 @@
 	<ItemGroup>
 		<ProjectReference Include="..\ResticManager.Application\ResticManager.Application.csproj" />
 		<ProjectReference Include="..\ResticManager.Models\ResticManager.Models.csproj" />
-		<ProjectReference Include="..\ResticManager.PgSql\ResticManager.PgSql.csproj" />
 		<ProjectReference Include="..\ResticManager.Sqlite\ResticManager.Sqlite.csproj" />
 	</ItemGroup>
 

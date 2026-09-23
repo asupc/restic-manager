@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using ResticManager.Application.Services.Abstractions;
 using ResticManager.Data;
 using ResticManager.Models;
+using ResticManager.Models.Dtos;
 
 namespace ResticManager.Web.Controllers
 {
@@ -36,6 +37,21 @@ namespace ResticManager.Web.Controllers
         }
 
         /// <summary>
+        /// 分页获取备份记录（支持任务ID、状态、关键词筛选）
+        /// </summary>
+        [HttpGet("paged")]
+        public async Task<ActionResult<PagedResult<BackupRecord>>> GetPaged(
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 10,
+            [FromQuery] int? taskId = null,
+            [FromQuery] string? status = null,
+            [FromQuery] string? keyword = null)
+        {
+            var pagedResult = await _recordService.GetPagedRecordsAsync(page, pageSize, taskId, status, keyword);
+            return Ok(pagedResult);
+        }
+
+        /// <summary>
         /// 根据任务ID获取备份记录
         /// </summary>
         /// <param name="taskId">任务ID</param>
@@ -44,6 +60,22 @@ namespace ResticManager.Web.Controllers
         {
             var records = await _recordService.GetRecordsByTaskIdAsync(taskId);
             return Ok(records);
+        }
+
+        /// <summary>
+        /// 分页获取指定任务的备份记录
+        /// </summary>
+        /// <param name="taskId">任务ID</param>
+        /// <param name="page">页码</param>
+        /// <param name="pageSize">每页条数</param>
+        [HttpGet("task/{taskId}/paged")]
+        public async Task<ActionResult<PagedResult<BackupRecord>>> GetPagedByTaskId(
+            int taskId,
+            [FromQuery] int page = 1,
+            [FromQuery] int pageSize = 10)
+        {
+            var pagedResult = await _recordService.GetPagedRecordsByTaskIdAsync(taskId, page, pageSize);
+            return Ok(pagedResult);
         }
 
         /// <summary>

@@ -16,12 +16,14 @@ public class BackupTasksController : ControllerBase
     private readonly IBackupTaskService _taskService;
     private readonly QuartzSchedulerService _schedulerService;
     private readonly JwtUtils _jwtUtils;
+    private readonly IAsyncTaskService _asyncTaskService;
 
-    public BackupTasksController(IBackupTaskService taskService, QuartzSchedulerService schedulerService, JwtUtils jwtUtils)
+    public BackupTasksController(IBackupTaskService taskService, QuartzSchedulerService schedulerService, JwtUtils jwtUtils, IAsyncTaskService asyncTaskService)
     {
         _taskService = taskService;
         _schedulerService = schedulerService;
         _jwtUtils = jwtUtils;
+        _asyncTaskService = asyncTaskService;
     }
 
 
@@ -98,12 +100,25 @@ public class BackupTasksController : ControllerBase
     [HttpPost("{id}/run")]
     public async Task<IActionResult> Run(int id)
     {
+        var task = await _taskService.GetTaskByIdAsync(id);
+        if (task == null)
+            return NotFound(new { message = "未找到指定的任务" });
+        if (!task.Repository.IsInitialized)
+            return BadRequest(new { message = "关联的仓库未初始化" });
+
         try
         {
-            await _taskService.RunTaskAsync(id);
-            return Ok(new { message = "备份任务已启动" });
+            // 登记后台任务后立即返回；实际执行（含保留策略与快照缓存同步）由 AsyncTaskService 完成，
+            // 与 Quartz 定时触发的 BackupTaskJob 是同一条执行路径
+            var taskId = await _asyncTaskService.CreateTaskAsync(
+                AsyncTaskTypes.BackupRun,
+                task.RepositoryId,
+                $"备份任务：{task.Name}",
+                new { backupTaskId = id },
+                targetKey: id.ToString());
+            return Ok(new { taskId, message = "备份任务已提交，正在后台执行" });
         }
-        catch (Exception ex)
+        catch (InvalidOperationException ex)
         {
             return BadRequest(new { message = ex.Message });
         }

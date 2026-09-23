@@ -2,13 +2,13 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
+using Quartz;
 using ResticManager.Application.Jobs;
 using ResticManager.Application.Services.Abstractions;
 using ResticManager.Application.Services.Implements;
 using ResticManager.Application.Utils;
 using ResticManager.Data;
 using ResticManager.Models;
-using ResticManager.PgSql;
 using ResticManager.Sqlite;
 using ResticManager.Web.Middleware;
 using System.Runtime.InteropServices;
@@ -32,6 +32,11 @@ builder.Services.AddDbContext<ResticManagerDbContext>(options =>
 {
     switch (databaseProvider.ToLower())
     {
+        case "mysql":
+            var mysqlConnectionString = builder.Configuration.GetConnectionString("MySqlConnection");
+            var serverVersion = ServerVersion.AutoDetect(mysqlConnectionString);
+            options.UseMySql(mysqlConnectionString, serverVersion);
+            break;
         case "postgresql":
             options.UseNpgsql(builder.Configuration.GetConnectionString("PostgreSqlConnection"));
             break;
@@ -47,9 +52,9 @@ switch (databaseProvider.ToLower())
     //case "mysql":
     //    builder.Services.AddScoped<ResticManagerDbContext, MySqlDbContext>();
     //    break;
-    case "postgresql":
-        builder.Services.AddScoped<ResticManagerDbContext, PgSqlDbContext>();
-        break;
+    //case "postgresql":
+    //    builder.Services.AddScoped<ResticManagerDbContext, PgSqlDbContext>();
+    //    break;
     default:
         builder.Services.AddScoped<ResticManagerDbContext, SqliteDbContext>();
         break;
@@ -59,17 +64,27 @@ builder.Services.AddScoped<JwtUtils>();
 builder.Services.AddScoped<IAuthService, AuthService>();
 builder.Services.AddScoped<IResticService, ResticService>();
 builder.Services.AddScoped<IRepositoryService, RepositoryService>();
+builder.Services.AddScoped<ISnapshotService, SnapshotService>();
 builder.Services.AddScoped<IBackupTaskService, BackupTaskService>();
 builder.Services.AddScoped<IBackupRecordService, BackupRecordService>();
 builder.Services.AddScoped<IBackupRuleService, BackupRuleService>();
+builder.Services.AddScoped<IRepositoryHealthCheckService, RepositoryHealthCheckService>();
+builder.Services.AddScoped<IMaintenanceSettingService, MaintenanceSettingService>();
 builder.Services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
+
+// 后台异步任务服务（Singleton + HostedService）：
+// 启动时先做遗留任务清理（标记失败），再启动 Quartz 调度器
+builder.Services.AddSingleton<IAsyncTaskService, AsyncTaskService>();
+builder.Services.AddHostedService(sp => (AsyncTaskService)sp.GetRequiredService<IAsyncTaskService>());
 
 // 添加 Quartz 调度服务
 builder.Services.AddHostedService<QuartzSchedulerService>();
 builder.Services.AddSingleton<QuartzSchedulerService>();
 
-// 添加对 BackupTaskJob 的依赖注入支持
+// 添加对 Quartz Job 的依赖注入支持
 builder.Services.AddTransient<BackupTaskJob>();
+builder.Services.AddTransient<RepositoryHealthCheckJob>();
+builder.Services.AddTransient<MaintenanceJob>();
 
 builder.Services.AddControllers()
     .AddJsonOptions(options =>
@@ -106,9 +121,22 @@ builder.Services.AddCors(options =>
     options.AddPolicy("AllowVueApp",
         policy =>
         {
-            policy.WithOrigins("http://localhost:8080")
+            // 允许前端开发服务器和生产环境自身访问
+            var allowedOrigins = new List<string>
+            {
+                "http://localhost:8080",
+                "http://localhost:5050",
+                "https://localhost:5050"
+            };
+
+            // 允许通过配置覆盖 (appsettings.json 中 CORS:AllowedOrigins)
+            var extraOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>();
+            if (extraOrigins != null) allowedOrigins.AddRange(extraOrigins);
+
+            policy.WithOrigins(allowedOrigins.ToArray())
                   .AllowAnyHeader()
-                  .AllowAnyMethod();
+                  .AllowAnyMethod()
+                  .AllowCredentials();
         });
 });
 
