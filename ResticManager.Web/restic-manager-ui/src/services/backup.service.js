@@ -24,18 +24,9 @@ export const backupService = {
     await api.delete(`/backuptasks/${id}`);
   },
 
-  // 运行任务
+  // 运行任务（提交后台备份任务，返回 { taskId }；执行进度通过全局任务轮询跟踪）
   async runTask(id) {
     const response = await api.post(`/backuptasks/${id}/run`);
-    return response.data;
-  },
-
-  // 初始化仓库
-  async initializeRepository(repoPath, password) {
-    const response = await api.post("/backuptasks/init-repo", {
-      repoPath,
-      password,
-    });
     return response.data;
   },
 

@@ -1,9 +1,13 @@
 import Vue from 'vue'
 import Vuex from 'vuex'
+import tasks from './modules/tasks'
 
 Vue.use(Vuex)
 
 export default new Vuex.Store({
+  modules: {
+    tasks
+  },
   state: {
     loading: false,
     loadingText: '加载中...'

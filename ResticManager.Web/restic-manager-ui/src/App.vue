@@ -1,8 +1,15 @@
 <template>
   <div id="app">
-    <app-navbar></app-navbar>
-    <div class="main-container" v-loading.fullscreen.lock="loading" :element-loading-text="loadingText">
-      <router-view />
+    <router-view v-if="$route.path === '/login' || $route.path === '/register'" />
+    <div v-else class="app-layout">
+      <app-navbar :collapsed="sidebarCollapsed" @toggle="sidebarCollapsed = !sidebarCollapsed" />
+      <main class="app-main" :class="{ 'app-main--expanded': sidebarCollapsed }">
+        <div class="app-content" v-loading.fullscreen.lock="loading" :element-loading-text="loadingText">
+          <transition name="page-fade" mode="out-in">
+            <router-view />
+          </transition>
+        </div>
+      </main>
     </div>
   </div>
 </template>
@@ -11,9 +18,12 @@
 import AppNavbar from '@/components/AppNavbar.vue';
 
 export default {
-  name: "App",
-  components: {
-    AppNavbar
+  name: 'App',
+  components: { AppNavbar },
+  data() {
+    return {
+      sidebarCollapsed: false
+    };
   },
   computed: {
     loading() {
@@ -22,21 +32,30 @@ export default {
     loadingText() {
       return this.$store.getters.loadingText;
     }
+  },
+  mounted() {
+    this.syncTaskPolling();
+  },
+  watch: {
+    '$route'(to) {
+      this.syncTaskPolling(to);
+    }
+  },
+  methods: {
+    // 登录后启动后台任务全局轮询（侧边栏角标 + 完成通知），离开业务页/登出时停止
+    syncTaskPolling(to) {
+      const path = to ? to.path : this.$route.path;
+      const isAuthPage = path === '/login' || path === '/register';
+      if (!isAuthPage && localStorage.getItem('token')) {
+        this.$store.dispatch('tasks/start');
+      } else {
+        this.$store.dispatch('tasks/stop');
+      }
+    }
   }
 };
 </script>
 
 <style>
-#app {
-  font-family: Avenir, Helvetica, Arial, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  color: #2c3e50;
-}
-
-.main-container {
-  margin-top: 60px;
-  /* 为顶部导航栏留出空间 */
-  padding: 20px;
-}
+/* 全局样式集中在 src/styles/theme.css */
 </style>

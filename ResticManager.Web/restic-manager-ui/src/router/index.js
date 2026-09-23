@@ -9,6 +9,8 @@ import Repositories from "@/views/Repositories.vue";
 import RepositorySnapshots from "@/views/RepositorySnapshots.vue";
 import SnapshotFiles from "@/views/SnapshotFiles.vue";
 import BackupManagement from "@/views/BackupManagement.vue";
+import BackupRecords from "@/views/BackupRecords.vue";
+import Settings from "@/views/Settings.vue";
 import { authService } from "@/services/auth.service";
 
 Vue.use(VueRouter);
@@ -33,6 +35,11 @@ const routes = [
     path: "/tasks",
     name: "BackupTasks",
     component: BackupTasks,
+  },
+  {
+    path: "/records",
+    name: "BackupRecords",
+    component: BackupRecords,
   },
   {
     path: "/rules",
@@ -60,6 +67,11 @@ const routes = [
     name: "SnapshotFiles",
     component: SnapshotFiles,
     props: true,
+  },
+  {
+    path: "/settings",
+    name: "Settings",
+    component: Settings,
   },
 ];
 

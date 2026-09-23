@@ -48,19 +48,14 @@ const endRequest = () => {
     hideLoading();
 };
 
-// 根据环境设置baseURL
+// 根据环境设置baseURL - 始终使用相对路径,由 dev server 代理或生产环境同源服务处理
 const getBaseURL = () => {
-    // 在生产环境中使用相对路径
-    if (process.env.NODE_ENV === "production") {
-        return "/api";
-    }
-    // 开发环境中使用本地后端地址
-    return "http://localhost:5050/api";
+    return "/api";
 };
 
 const api = axios.create({
     baseURL: getBaseURL(),
-    timeout: 60000 * 60, // 设置全局超时时间为30秒
+    timeout: 60000, // 60秒
 });
 
 api.interceptors.request.use(
@@ -76,7 +71,10 @@ api.interceptors.request.use(
 
         // 开始请求，设置loading
         // 可以通过 config.loadingText 设置自定义loading文本
-        startRequest(config.loadingText);
+        // 传入 { loading: false } 可跳过全局全屏 loading（后台任务提交/轮询请求专用）
+        if (config.loading !== false) {
+            startRequest(config.loadingText);
+        }
 
         return config;
     },

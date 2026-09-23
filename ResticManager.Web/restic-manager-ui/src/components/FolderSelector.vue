@@ -282,23 +282,41 @@ export default {
 .path-bar {
   display: flex;
   align-items: center;
+  gap: var(--space-2);
   margin-bottom: 15px;
-  padding: 8px 12px;
-  background-color: #f5f7fa;
-  border-radius: 4px;
-  border: 1px solid #e4e7ed;
+  padding: 4px 6px;
+  background-color: var(--color-bg-soft);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border);
 }
 
+/* 上级目录/刷新作为路径条的内嵌按钮,与中间路径显示保持一体 */
 .path-bar .el-button {
-  margin-right: 10px;
+  background: transparent !important;
+  border-color: transparent !important;
+  color: var(--color-text-secondary) !important;
+}
+
+.path-bar .el-button:hover,
+.path-bar .el-button:focus {
+  background: var(--color-bg-sidebar-hov) !important;
+  border-color: transparent !important;
+  color: var(--brand-300) !important;
+}
+
+.path-bar .el-button.is-disabled,
+.path-bar .el-button.is-disabled:hover,
+.path-bar .el-button.is-disabled:focus {
+  background: transparent !important;
+  border-color: transparent !important;
+  color: var(--color-text-placeholder) !important;
 }
 
 .current-path {
   flex: 1;
-  padding: 6px 12px;
-  background-color: white;
-  border: 1px solid #dcdfe6;
-  border-radius: 4px;
+  min-width: 0;
+  padding: 6px 4px;
+  color: var(--color-text-regular);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;

@@ -1,288 +1,282 @@
 <template>
-  <el-card>
+  <div>
+    <!-- 工具栏 -->
     <div class="snapshot-toolbar">
-      <el-button v-if="!compareMode" type="primary" size="small" @click="enterCompareMode"
-        :disabled="snapshots.length < 2">
-        比较快照
-      </el-button>
-      <el-button v-else type="danger" size="small" @click="exitCompareMode">
-        取消比较
-      </el-button>
-      <el-button v-if="compareMode" type="success" size="small" @click="showDiff"
-        :disabled="selectedSnapshots.length !== 2" style="margin-left: 10px;">
-        显示差异
-      </el-button>
+      <div class="toolbar-left">
+        <el-input v-model="searchKeyword" placeholder="按主机名或路径搜索..." prefix-icon="el-icon-search" size="small" clearable class="toolbar-search"></el-input>
+        <span class="text-secondary" style="font-size:12px;">共 {{ filteredSnapshots.length }} 个快照</span>
+      </div>
+      <div class="toolbar-right">
+        <el-button v-if="!compareMode" type="danger" plain size="small" icon="el-icon-delete" @click="openBatchDelete" :disabled="selectedRows.length === 0">
+          批量删除{{ selectedRows.length ? `(${selectedRows.length})` : '' }}
+        </el-button>
+        <el-button v-if="!compareMode" type="primary" plain size="small" icon="el-icon-compare" @click="enterCompareMode" :disabled="snapshots.length < 2">比较快照</el-button>
+        <template v-else>
+          <el-tag effect="plain" size="small">{{ selectedSnapshots.length }}/2 已选</el-tag>
+          <el-button type="success" size="small" icon="el-icon-view" @click="showDiff" :disabled="selectedSnapshots.length !== 2">显示差异</el-button>
+          <el-button size="small" @click="exitCompareMode">取消</el-button>
+        </template>
+      </div>
     </div>
 
-    <el-alert v-if="selectedSnapshots.length > 0 && compareMode"
-      :title="'已选择快照: ' + selectedSnapshots.map(s => new Date(s.time).toLocaleString()).join('  -  ')" type="info"
-      show-icon style="margin: 10px 0;">
-    </el-alert>
-    <el-table :data="snapshots" style="width: 100%" v-if="snapshots.length > 0">
-      <el-table-column v-if="compareMode" width="50">
-        <template slot-scope="scope">
-          <el-checkbox v-model="scope.row.checked" @change="handleSnapshotSelect(scope.row)"
-            :disabled="!scope.row.checked && selectedSnapshots.length >= 2">
-          </el-checkbox>
-        </template>
-      </el-table-column>
+    <!-- 选中提示 -->
+    <el-alert v-if="compareMode && selectedSnapshots.length > 0" :title="'已选择: ' + selectedSnapshots.map(s => formatShortTime(s.time)).join('  →  ')" type="info" show-icon :closable="false" class="mb-3"></el-alert>
 
-      <el-table-column type="expand" v-if="showDetails">
-        <template slot-scope="props">
-          <el-card shadow="never" class="snapshot-summary-card">
-            <div slot="header" class="clearfix">
-              <span>快照摘要信息</span>
-            </div>
-            <el-row :gutter="20">
-              <el-col :span="6">
-                <div class="summary-item">
-                  <span class="summary-label">未修改文件:</span>
-                  <span class="summary-value">{{ props.row.summary.files_unmodified }}</span>
-                </div>
-              </el-col>
+    <!-- 空状态 -->
+    <div v-if="!loading && filteredSnapshots.length === 0" class="empty">
+      <div class="empty__title">该仓库暂无快照</div>
+      <div class="empty__desc">运行备份任务后,快照会出现在这里</div>
+    </div>
 
-              <el-col :span="6">
-                <div class="summary-item">
-                  <span class="summary-label">新增目录:</span>
-                  <span class="summary-value">{{ props.row.summary.dirs_new }}</span>
-                </div>
-              </el-col>
-              <el-col :span="6">
-                <div class="summary-item">
-                  <span class="summary-label">修改目录:</span>
-                  <span class="summary-value">{{ props.row.summary.dirs_changed }}</span>
-                </div>
-              </el-col>
-              <el-col :span="6">
-                <div class="summary-item">
-                  <span class="summary-label">未修改目录:</span>
-                  <span class="summary-value">{{ props.row.summary.dirs_unmodified }}</span>
-                </div>
-              </el-col>
+    <!-- 快照表格 -->
+    <div v-else v-loading="loading">
+      <el-table
+        ref="snapshotTable"
+        :data="paginatedSnapshots"
+        row-key="id"
+        size="small"
+        stripe
+        @selection-change="onSelectionChange"
+      >
+        <el-table-column type="selection" width="42" reserve-selection></el-table-column>
+        <el-table-column label="时间" min-width="125">
+          <template #default="scope">
+            <span class="text-bold">{{ formatShortTime(scope.row.time) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="快照 ID" width="105">
+          <template #default="scope">
+            <span class="text-mono snapshot-id">{{ scope.row.short_id }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="主机" width="110" show-overflow-tooltip>
+          <template #default="scope">{{ scope.row.hostname }}</template>
+        </el-table-column>
+        <el-table-column label="路径" min-width="150" show-overflow-tooltip>
+          <template #default="scope">
+            <span class="text-mono">{{ (scope.row.paths || []).join(', ') }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="标签" min-width="130">
+          <template #default="scope">
+            <template v-if="scope.row.tags && scope.row.tags.length">
+              <el-tag v-for="t in scope.row.tags" :key="t" size="mini" effect="plain" class="table-tag">{{ t }}</el-tag>
+            </template>
+            <span v-else class="text-secondary">-</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="文件" width="75" align="right">
+          <template #default="scope">{{ scope.row.summary?.total_files_processed || 0 }}</template>
+        </el-table-column>
+        <el-table-column label="大小" width="90" align="right">
+          <template #default="scope">{{ formatFileSize(scope.row.summary?.total_bytes_processed || 0) }}</template>
+        </el-table-column>
+        <el-table-column label="耗时" width="80" align="right">
+          <template #default="scope">{{ formatDuration(scope.row.summary?.backup_end, scope.row.summary?.backup_start) }}</template>
+        </el-table-column>
+        <el-table-column v-if="compareMode" label="比较" width="55" align="center">
+          <template #default="scope">
+            <el-checkbox v-model="scope.row.checked" :disabled="!scope.row.checked && selectedSnapshots.length >= 2" @change="handleSnapshotSelect(scope.row)"></el-checkbox>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="350" fixed="right">
+          <template #default="scope">
+            <el-button size="mini" type="text" icon="el-icon-document" @click="onViewFiles(scope.row)">文件</el-button>
+            <el-button size="mini" type="text" icon="el-icon-back" @click="onRestore(scope.row)">恢复</el-button>
+            <el-button size="mini" type="text" icon="el-icon-price-tag" @click="onEditTags(scope.row)">标签</el-button>
+            <el-button size="mini" type="text" class="text-danger" icon="el-icon-delete" @click="onDelete(scope.row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
 
-              <el-col :span="6">
-                <div class="summary-item">
-                  <span class="summary-label">新增数据:</span>
-                  <span class="summary-value">{{ formatFileSize(props.row.summary.data_added) }}</span>
-                </div>
-              </el-col>
-              <el-col :span="6">
-                <div class="summary-item">
-                  <span class="summary-label">总处理文件:</span>
-                  <span class="summary-value">{{ props.row.summary.total_files_processed }}</span>
-                </div>
-              </el-col>
-              <el-col :span="6">
-                <div class="summary-item">
-                  <span class="summary-label">总处理大小:</span>
-                  <span class="summary-value">{{ formatFileSize(props.row.summary.total_bytes_processed) }}</span>
-                </div>
-              </el-col>
+      <!-- 分页栏 -->
+      <div class="snapshot-pagination" v-if="filteredSnapshots.length > pageSize">
+        <el-pagination
+          background
+          @size-change="(v) => { pageSize = v; currentPage = 1; }"
+          @current-change="(v) => currentPage = v"
+          :current-page="currentPage"
+          :page-sizes="[10, 20, 50]"
+          :page-size="pageSize"
+          layout="total, sizes, prev, pager, next"
+          :total="filteredSnapshots.length"
+        />
+      </div>
+    </div>
 
-              <el-col :span="6">
-                <div class="summary-item">
-                  <span class="summary-label">数据块:</span>
-                  <span class="summary-value">{{ props.row.summary.data_blobs }}</span>
-                </div>
-              </el-col>
-            </el-row>
-          </el-card>
-        </template>
-      </el-table-column>
-
-      <el-table-column prop="hostname" label="主机名" width="150"></el-table-column>
-      <el-table-column prop="time" label="开始时间" width="200">
-        <template slot-scope="scope">
-          {{ new Date(scope.row.summary.backup_start).toLocaleString() }}
-        </template>
-      </el-table-column>
-      <el-table-column label="总用时" width="120">
-        <template slot-scope="scope">
-          <span>{{ formatDuration(scope.row.summary.backup_end, scope.row.summary.backup_start) }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="总大小" width="120">
-        <template slot-scope="scope">
-          <span class="size-total">{{ formatFileSize(scope.row.summary.total_bytes_processed) }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="总文件" width="100">
-        <template slot-scope="scope">
-          <span class="files-total">{{ scope.row.summary.total_files_processed }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="新增文件" width="100">
-        <template slot-scope="scope">
-          <span class="files-new">{{ scope.row.summary.files_new }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="修改文件" width="100">
-        <template slot-scope="scope">
-          <span class="files-changed">{{ scope.row.summary.files_changed }}</span>
-        </template>
-      </el-table-column>
-      <el-table-column label="路径">
-        <template slot-scope="scope">
-          <div v-for="path in scope.row.paths" :key="path">{{ path }}</div>
-        </template>
-      </el-table-column>
-      <el-table-column label="操作" width="250" fixed="right">
-        <template slot-scope="scope">
-          <el-button size="mini" @click="onViewFiles(scope.row)">查看文件</el-button>
-          <el-button size="mini" type="primary" @click="onRestore(scope.row)">恢复</el-button>
-          <el-button size="mini" type="danger" @click="onDelete(scope.row)">删除</el-button>
-        </template>
-      </el-table-column>
-    </el-table>
-    <el-empty v-else description="暂无快照"></el-empty>
-
-    <!-- 恢复快照对话框 -->
-    <el-dialog :visible.sync="restoreDialogVisible" title="恢复快照" width="500px" :close-on-click-modal="false"
-      append-to-body>
-      <el-form :model="restoreForm" label-position="left" label-width="120px">
-        <el-form-item label="恢复路径">
-          <folder-selector v-model="restoreForm.path" title="选择恢复路径" placeholder="请选择或输入恢复路径">
-          </folder-selector>
-          <div class="form-tip">
-            <i class="el-icon-info"></i>
-            选择文件恢复的目标路径
-          </div>
+    <!-- 恢复对话框 -->
+    <el-dialog :visible.sync="restoreDialogVisible" title="恢复快照" width="500px" :close-on-click-modal="false" append-to-body>
+      <el-form :model="restoreForm" label-position="top">
+        <el-form-item label="恢复到目录">
+          <folder-selector v-model="restoreForm.path" title="选择恢复路径" placeholder="选择或输入恢复目录"></folder-selector>
+          <div class="form-tip"><i class="el-icon-info"></i> 快照内容将恢复到该目录下</div>
+        </el-form-item>
+        <el-form-item>
+          <el-checkbox v-model="restoreForm.verify">恢复后校验文件内容 (--verify)</el-checkbox>
+          <div class="form-tip"><i class="el-icon-info"></i> 校验会读取恢复后的文件与快照比对,耗时更长但更可靠</div>
         </el-form-item>
       </el-form>
-      <span slot="footer" class="dialog-footer">
+      <template #footer>
         <el-button @click="restoreDialogVisible = false">取消</el-button>
         <el-button type="primary" @click="performRestore">恢复</el-button>
-      </span>
+      </template>
     </el-dialog>
 
-    <!-- 删除快照对话框 -->
-    <el-dialog :visible.sync="deleteDialogVisible" title="删除快照" width="500px" :close-on-click-modal="false"
-      append-to-body>
-      <el-alert title="警告" type="warning" description="您确定要删除这个快照吗？此操作无法撤销。" show-icon :closable="false">
+    <!-- 删除对话框 -->
+    <el-dialog :visible.sync="deleteDialogVisible" title="删除快照" width="480px" :close-on-click-modal="false" append-to-body>
+      <el-alert type="warning" :closable="false" show-icon>
+        <template #title>
+          <span>确定要删除这个快照吗?删除后无法恢复</span>
+        </template>
       </el-alert>
-      <div style="margin-top: 20px;">
-        <p><strong>快照ID:</strong> {{ deleteItem?.short_id }}</p>
-        <p><strong>主机名:</strong> {{ deleteItem?.hostname }}</p>
-        <p><strong>时间:</strong> {{ deleteItem ? new Date(deleteItem.summary.backup_start).toLocaleString() : ''
-          }}</p>
+      <div class="delete-meta">
+        <div><span class="text-secondary">快照 ID</span><span class="text-mono">{{ deleteItem?.short_id }}</span></div>
+        <div><span class="text-secondary">主机名</span><span>{{ deleteItem?.hostname }}</span></div>
+        <div><span class="text-secondary">创建时间</span><span>{{ deleteItem ? formatFullTime(deleteItem.summary?.backup_start) : '' }}</span></div>
       </div>
-      <span slot="footer" class="dialog-footer">
+      <template #footer>
         <el-button @click="deleteDialogVisible = false">取消</el-button>
-        <el-button type="danger" @click="performDelete">删除</el-button>
-      </span>
+        <el-button type="danger" @click="performDelete">确认删除</el-button>
+      </template>
     </el-dialog>
 
-    <!-- 快照差异抽屉 -->
-    <el-drawer :visible.sync="diffDrawerVisible" :title="diffDrawerTitle" :with-header="false" size="60%"
-      :close-on-click-modal="false" append-to-body>
-      <el-alert v-if="diffError" type="error" :title="diffError" show-icon></el-alert>
-      <!-- <el-card class="diff-result-card"> -->
-      <div v-if="diffResult && !diffError" class="diff-result">
-        <el-card v-if="diffResult.statistics">
-          <div slot="header">
-            <span>{{ diffDrawerTitle }}</span>
-            <el-alert title="快照选择顺序影响比较结果" type="info" show-icon size="small" style="margin-top: 10px;">
-            </el-alert>
-            <div style="margin-top: 20px; display: flex; justify-content: space-between; align-items: center;">
-              <div>
-                <el-select v-model="diffTypeFilter" size="mini" placeholder="筛选类型" clearable
-                  style="width: 120px; margin-right: 10px;">
-                  <el-option label="新增 (+)" value="+"></el-option>
-                  <el-option label="删除 (-)" value="-"></el-option>
-                  <el-option label="修改 (M)" value="M"></el-option>
-                  <!-- <el-option label="类型变更 (T)" value="T"></el-option>
-                  <el-option label="元数据变更 (U)" value="U"></el-option> -->
-                </el-select>
-                <el-input size="mini" v-model="diffSearchKeyword" placeholder="搜索文件路径..." clearable
-                  style="width: 300px;" @clear="diffSearchKeyword = ''" @keyup.enter.native="handleDiffSearch">
-                  <i slot="prefix" class="el-input__icon el-icon-search"></i>
-                </el-input>
-              </div>
-            </div>
+    <!-- 批量删除对话框 -->
+    <el-dialog :visible.sync="batchDeleteDialogVisible" title="批量删除快照" width="520px" :close-on-click-modal="false" append-to-body>
+      <el-alert type="warning" :closable="false" show-icon>
+        <template #title>
+          <span>确定要删除选中的 {{ batchDeleteItems.length }} 个快照吗?删除后无法恢复</span>
+        </template>
+      </el-alert>
+      <div class="batch-delete-list">
+        <div v-for="s in batchDeleteItems" :key="s.id" class="batch-delete-item">
+          <span class="text-mono">{{ s.short_id }}</span>
+          <span class="text-secondary">{{ formatShortTime(s.time) }}</span>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="batchDeleteDialogVisible = false">取消</el-button>
+        <el-button type="danger" @click="performBatchDelete">确认删除</el-button>
+      </template>
+    </el-dialog>
 
-            <div style="margin-top: 10px; display: flex; justify-content: space-between; align-items: center;">
-              <el-pagination size="mini" @size-change="handleDiffPageSizeChange" @current-change="handleDiffPageChange"
-                :current-page="diffCurrentPage" :page-sizes="[10, 20, 50, 100]" :page-size="diffPageSize"
-                layout="total, sizes, prev, pager, next" :total="filteredDiffChanges.length">
-              </el-pagination>
+    <!-- 标签编辑对话框 -->
+    <el-dialog :visible.sync="tagDialogVisible" title="编辑快照标签" width="480px" :close-on-click-modal="false" append-to-body>
+      <div class="tag-editor">
+        <el-tag
+          v-for="t in tagList"
+          :key="t"
+          closable
+          size="small"
+          @close="removeTag(t)"
+          class="tag-editor__tag"
+        >{{ t }}</el-tag>
+        <el-input
+          v-if="tagInputVisible"
+          ref="tagInput"
+          v-model="tagInputValue"
+          size="mini"
+          class="tag-editor__input"
+          @keyup.enter.native="confirmTagInput"
+          @blur="confirmTagInput"
+        ></el-input>
+        <el-button v-else size="mini" icon="el-icon-plus" @click="showTagInput">添加标签</el-button>
+      </div>
+      <div class="form-tip"><i class="el-icon-info"></i> 保存将覆盖该快照的全部标签(restic tag --set)</div>
+      <template #footer>
+        <el-button @click="tagDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="tagSaving" @click="saveTags">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 差异抽屉 -->
+    <el-drawer :visible.sync="diffDrawerVisible" :title="diffDrawerTitle" direction="rtl" size="70%" :with-header="true" append-to-body>
+      <div class="diff-drawer">
+        <el-alert v-if="diffError" type="error" :title="diffError" show-icon :closable="false" class="mb-3"></el-alert>
+        <div v-if="diffLoading" v-loading="true" class="diff-loading"></div>
+        <template v-else-if="diffResult && diffResult.statistics">
+          <div class="diff-stats">
+            <div class="diff-stat diff-stat--total">
+              <div class="diff-stat__num">{{ diffResult.statistics.changed_files }}</div>
+              <div class="diff-stat__label">变更文件</div>
+            </div>
+            <div class="diff-stat diff-stat--add">
+              <div class="diff-stat__num">{{ diffResult.statistics.added?.files || 0 }}</div>
+              <div class="diff-stat__label">新增</div>
+            </div>
+            <div class="diff-stat diff-stat--remove">
+              <div class="diff-stat__num">{{ diffResult.statistics.removed?.files || 0 }}</div>
+              <div class="diff-stat__label">删除</div>
             </div>
           </div>
-          <el-row :gutter="20">
-            <el-col :span="8">
-              <div class="stat-item">
-                <span class="stat-label">变更文件数:</span>
-                <span class="stat-value" style="color:darkorange;">{{ diffResult.statistics.changed_files }}</span>
-              </div>
-            </el-col>
-            <el-col :span="8">
-              <div class="stat-item">
-                <span class="stat-label">新增文件:</span>
-                <span class="stat-value" style="color:green;">{{ diffResult.statistics.added.files }}</span>
-              </div>
-            </el-col>
-            <el-col :span="8">
-              <div class="stat-item">
-                <span class="stat-label">删除文件:</span>
-                <span class="stat-value" style="color: #F00;">{{ diffResult.statistics.removed.files }}</span>
-              </div>
-            </el-col>
-          </el-row>
-          <el-row :gutter="20">
-            <!-- 可视化差异显示 -->
-            <div style="flex: 1; overflow: hidden; display: flex; flex-direction: column; margin-top: 20px;">
-              <!-- 添加搜索框和分页组件 -->
-              <el-table size="mini" :data="paginatedDiffChanges" style="width: 100%;">
-                <el-table-column prop="modifier" label="变更类型" width="120">
-                  <template slot-scope="scope">
-                    <el-tag :type="getModifierType(scope.row.modifier)">
-                      {{ getModifierLabel(scope.row.modifier) }}
-                    </el-tag>
-                  </template>
-                </el-table-column>
-                <el-table-column prop="path" label="文件路径"></el-table-column>
-              </el-table>
-            </div>
-          </el-row>
-        </el-card>
-      </div>
-      <div v-else-if="!diffLoading && !diffError">
-        <el-alert type="info" title="暂无差异信息" show-icon></el-alert>
-      </div>
-      <!-- </el-card> -->
-    </el-drawer>
 
-  </el-card>
+          <div class="diff-toolbar">
+            <el-select v-model="diffTypeFilter" size="small" placeholder="筛选变更类型" clearable style="width: 140px;">
+              <el-option label="新增 (+)" value="+"></el-option>
+              <el-option label="删除 (-)" value="-"></el-option>
+              <el-option label="修改 (M)" value="M"></el-option>
+            </el-select>
+            <el-input v-model="diffSearchKeyword" placeholder="搜索文件路径..." prefix-icon="el-icon-search" size="small" clearable style="width: 280px;" @keyup.enter.native="diffCurrentPage = 1"></el-input>
+            <span class="text-muted" style="font-size:12px;">{{ filteredDiffChanges.length }} 项</span>
+          </div>
+
+          <el-table :data="paginatedDiffChanges" size="small" stripe>
+            <el-table-column label="类型" width="100">
+              <template #default="scope">
+                <span class="rm-badge" :class="`rm-badge--${getModifierType(scope.row.modifier)}`">
+                  {{ getModifierLabel(scope.row.modifier) }}
+                </span>
+              </template>
+            </el-table-column>
+            <el-table-column label="文件路径">
+              <template #default="scope">
+                <span class="text-mono" style="font-size:12px;">{{ scope.row.path }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+          <el-pagination
+            class="mt-3"
+            background
+            layout="total, sizes, prev, pager, next"
+            :total="filteredDiffChanges.length"
+            :page-size="diffPageSize"
+            :current-page="diffCurrentPage"
+            :page-sizes="[10, 20, 50, 100]"
+            @current-change="diffCurrentPage = $event"
+            @size-change="(v) => { diffPageSize = v; diffCurrentPage = 1; }"
+          ></el-pagination>
+        </template>
+        <div v-else class="empty empty--small">
+          <div class="empty__title">暂无差异信息</div>
+        </div>
+      </div>
+    </el-drawer>
+  </div>
 </template>
 
 <script>
-import { Message, MessageBox } from 'element-ui'
-import FolderSelector from '@/components/FolderSelector.vue'
-import { repositoryService } from '@/services/repository.service'
+import { Message } from 'element-ui';
+import FolderSelector from '@/components/FolderSelector.vue';
+import { repositoryService } from '@/services/repository.service';
+import { pollTask } from '@/utils/task-poller';
 
 export default {
   name: 'SnapshotList',
-  components: {
-    FolderSelector
-  },
+  components: { FolderSelector },
   props: {
-    snapshots: {
-      type: Array,
-      default: () => []
-    },
-    showDetails: {
-      type: Boolean,
-      default: true
-    },
-    repositoryId: {
-      type: [String, Number],
-      required: true
-    }
+    snapshots: { type: Array, default: () => [] },
+    showDetails: { type: Boolean, default: true },
+    repositoryId: { type: [String, Number], required: true },
+    loading: { type: Boolean, default: false }
   },
   data() {
     return {
+      searchKeyword: '',
       compareMode: false,
       restoreDialogVisible: false,
       deleteDialogVisible: false,
+      batchDeleteDialogVisible: false,
+      batchDeleteItems: [],
+      selectedRows: [],
       diffDrawerVisible: false,
       restoreItem: null,
       deleteItem: null,
@@ -290,93 +284,93 @@ export default {
       diffError: '',
       diffLoading: false,
       selectedSnapshots: [],
-      restoreForm: {
-        path: ''
-      },
-      // 添加分页相关数据
-      currentPage: 1,
-      pageSize: 20,
-      // 差异结果分页数据
+      restoreForm: { path: '', verify: false },
       diffCurrentPage: 1,
       diffPageSize: 20,
-      // 差异结果搜索关键词
       diffSearchKeyword: '',
-      // 差异类型筛选
-      diffTypeFilter: ''
+      diffTypeFilter: '',
+      tagDialogVisible: false,
+      tagItem: null,
+      tagList: [],
+      tagInputVisible: false,
+      tagInputValue: '',
+      tagSaving: false,
+      currentPage: 1,
+      pageSize: 10
+    };
+  },
+  watch: {
+    searchKeyword() {
+      this.currentPage = 1;
+    },
+    // 父组件刷新列表后（增删改/同步），清空勾选，避免已删除快照残留在批量删除选择中
+    snapshots() {
+      this.clearTableSelection();
     }
   },
   computed: {
+    filteredSnapshots() {
+      if (!this.searchKeyword) return this.snapshots;
+      const q = this.searchKeyword.toLowerCase();
+      return this.snapshots.filter(s =>
+        (s.hostname && s.hostname.toLowerCase().includes(q)) ||
+        (s.paths || []).some(p => p.toLowerCase().includes(q))
+      );
+    },
+    paginatedSnapshots() {
+      const s = (this.currentPage - 1) * this.pageSize;
+      return this.filteredSnapshots.slice(s, s + this.pageSize);
+    },
     diffDrawerTitle() {
       if (this.selectedSnapshots.length === 2) {
-        return `快照差异:  ${new Date(this.selectedSnapshots[0].time).toLocaleString()} vs ${new Date(this.selectedSnapshots[1].time).toLocaleString()}`;
+        return `${formatTime(this.selectedSnapshots[0].time)} → ${formatTime(this.selectedSnapshots[1].time)}`;
       }
       return '快照差异比较';
     },
-    // 计算分页后的快照数据
-    paginatedSnapshots() {
-      const start = (this.currentPage - 1) * this.pageSize;
-      const end = start + this.pageSize;
-      return this.snapshots.slice(start, end);
-    },
-    // 计算过滤后的差异变更数据
     filteredDiffChanges() {
-      if (!this.diffResult || !this.diffResult.changes) {
-        return [];
-      }
-
-      let filtered = this.diffResult.changes;
-
-      // 根据类型筛选
-      if (this.diffTypeFilter) {
-        filtered = filtered.filter(change =>
-          change.modifier.includes(this.diffTypeFilter)
-        );
-      }
-
-      // 根据文件路径过滤变更
+      if (!this.diffResult || !this.diffResult.changes) return [];
+      let arr = this.diffResult.changes;
+      if (this.diffTypeFilter) arr = arr.filter(c => c.modifier && c.modifier.includes(this.diffTypeFilter));
       if (this.diffSearchKeyword) {
-        filtered = filtered.filter(change =>
-          change.path.toLowerCase().includes(this.diffSearchKeyword.toLowerCase())
-        );
+        const q = this.diffSearchKeyword.toLowerCase();
+        arr = arr.filter(c => c.path && c.path.toLowerCase().includes(q));
       }
-
-      return filtered;
+      return arr;
     },
-    // 计算分页后的差异变更数据
     paginatedDiffChanges() {
-      const start = (this.diffCurrentPage - 1) * this.diffPageSize;
-      const end = start + this.diffPageSize;
-      return this.filteredDiffChanges.slice(start, end);
+      const s = (this.diffCurrentPage - 1) * this.diffPageSize;
+      return this.filteredDiffChanges.slice(s, s + this.diffPageSize);
     }
   },
+  beforeDestroy() {
+    // 停止本组件在途任务的轮询
+    this._destroyed = true;
+    this.snapshots.forEach(s => { if ('checked' in s) this.$delete(s, 'checked'); });
+  },
   methods: {
-    // 添加分页相关方法
-    handleSizeChange(val) {
-      this.pageSize = val;
-      this.currentPage = 1;
+    // 表格勾选变化（reserve-selection 下跨页保留）
+    onSelectionChange(rows) {
+      this.selectedRows = rows;
     },
-    handleCurrentChange(val) {
-      this.currentPage = val;
+    clearTableSelection() {
+      this.selectedRows = [];
+      if (this.$refs.snapshotTable) {
+        this.$refs.snapshotTable.clearSelection();
+      }
     },
-    // 差异结果分页方法
-    handleDiffPageSizeChange(val) {
-      this.diffPageSize = val;
-      this.diffCurrentPage = 1;
+    openBatchDelete() {
+      if (this.selectedRows.length === 0) return;
+      this.batchDeleteItems = [...this.selectedRows];
+      this.batchDeleteDialogVisible = true;
     },
-    handleDiffPageChange(val) {
-      this.diffCurrentPage = val;
-    },
-    // 差异结果搜索方法
-    handleDiffSearch() {
-      // 重置到第一页
-      this.diffCurrentPage = 1;
+    performBatchDelete() {
+      this.$emit('delete-snapshots', { repositoryId: this.repositoryId, snapshots: this.batchDeleteItems });
+      this.batchDeleteDialogVisible = false;
+      this.clearTableSelection();
     },
     enterCompareMode() {
       this.compareMode = true;
-      // 初始化快照选择状态
-      this.snapshots.forEach(snapshot => {
-        this.$set(snapshot, 'checked', false);
-      });
+      this.snapshots.forEach(s => this.$set(s, 'checked', false));
       this.selectedSnapshots = [];
     },
     exitCompareMode() {
@@ -385,12 +379,10 @@ export default {
     },
     handleSnapshotSelect(snapshot) {
       if (snapshot.checked) {
-        // 添加到选中列表
         if (this.selectedSnapshots.length < 2) {
-          // 检查路径是否一致
           if (this.selectedSnapshots.length > 0) {
-            const firstSnapshot = this.selectedSnapshots[0];
-            if (JSON.stringify(firstSnapshot.paths) !== JSON.stringify(snapshot.paths)) {
+            const first = this.selectedSnapshots[0];
+            if (JSON.stringify(first.paths) !== JSON.stringify(snapshot.paths)) {
               snapshot.checked = false;
               Message.warning('只能比较路径相同的快照');
               return;
@@ -398,298 +390,274 @@ export default {
           }
           this.selectedSnapshots.push(snapshot);
         } else {
-          // 如果已选中两个，取消勾选当前项
           snapshot.checked = false;
-          Message.warning('最多只能选择两个快照进行比较');
+          Message.warning('最多选择 2 个快照');
         }
       } else {
-        // 从选中列表中移除
-        const index = this.selectedSnapshots.findIndex(s => s.id === snapshot.id);
-        if (index > -1) {
-          this.selectedSnapshots.splice(index, 1);
-        }
+        const idx = this.selectedSnapshots.findIndex(s => s.id === snapshot.id);
+        if (idx > -1) this.selectedSnapshots.splice(idx, 1);
       }
     },
     showDiff() {
-      if (this.selectedSnapshots.length === 2) {
-        // 再次检查路径一致性
-        if (JSON.stringify(this.selectedSnapshots[0].paths) !== JSON.stringify(this.selectedSnapshots[1].paths)) {
-          Message.error('所选快照的路径不一致，无法比较');
-          return;
-        }
-        this.compareSnapshots(this.selectedSnapshots[0], this.selectedSnapshots[1]);
-      }
+      if (this.selectedSnapshots.length !== 2) return;
+      this.compareSnapshots(this.selectedSnapshots[0], this.selectedSnapshots[1]);
     },
     onViewFiles(snapshot) {
-      this.$router.push(`/repositories/${this.repositoryId}/snapshots/${snapshot.id}/files?shortId=${snapshot.short_id}&path=${snapshot.paths[0]}`)
+      this.$router.push(`/repositories/${this.repositoryId}/snapshots/${snapshot.id}/files?shortId=${snapshot.short_id}&path=${snapshot.paths[0]}`);
     },
     onRestore(snapshot) {
-      this.restoreItem = snapshot
-      this.restoreForm.path = ''
-      this.restoreDialogVisible = true
+      this.restoreItem = snapshot;
+      this.restoreForm.path = '';
+      this.restoreForm.verify = false;
+      this.restoreDialogVisible = true;
     },
     onDelete(snapshot) {
-      this.deleteItem = snapshot
-      this.deleteDialogVisible = true
+      this.deleteItem = snapshot;
+      this.deleteDialogVisible = true;
     },
-    onDiff(snapshot) {
-      // 如果还没有选中快照，则选中当前快照
-      if (this.selectedSnapshots.length === 0) {
-        this.selectedSnapshots.push(snapshot)
-        Message.info('已选择第一个快照，请选择第二个快照进行比较')
-        return
-      }
-
-      // 如果点击的是已经选中的快照，则取消选择
-      if (this.selectedSnapshots.length === 1 && this.selectedSnapshots[0].id === snapshot.id) {
-        this.selectedSnapshots = []
-        Message.info('已取消选择快照')
-        return
-      }
-
-      // 检查路径是否一致
-      if (JSON.stringify(this.selectedSnapshots[0].paths) !== JSON.stringify(snapshot.paths)) {
-        Message.error('只能比较路径相同的快照');
+    async compareSnapshots(s1, s2) {
+      this.diffDrawerVisible = true;
+      this.diffLoading = true;
+      this.diffResult = null;
+      this.diffError = '';
+      this.diffCurrentPage = 1;
+      this.diffSearchKeyword = '';
+      this.diffTypeFilter = '';
+      let res;
+      try {
+        res = await repositoryService.diffSnapshots(this.repositoryId, s1.id, s2.id);
+      } catch (e) {
+        this.diffLoading = false;
+        this.diffError = e.response?.data?.message || e.message || '';
         return;
       }
-
-      // 如果已经选中了一个快照，则进行比较
-      if (this.selectedSnapshots.length === 1) {
-        this.compareSnapshots(this.selectedSnapshots[0], snapshot)
-        // 清除选中状态
-        this.selectedSnapshots = []
-        return
+      this.$store.dispatch('tasks/noteSubmitted', res.taskId);
+      try {
+        const task = await pollTask(res.taskId, { shouldStop: () => this._destroyed });
+        if (this._destroyed) return;
+        if (task.status === 'Succeeded') {
+          this.diffResult = task.resultJson ? JSON.parse(task.resultJson) : null;
+        } else {
+          this.diffError = '差异比较失败: ' + (task.error || '');
+        }
+      } catch (e) {
+        if (e.message !== 'cancelled') this.diffError = '差异比较失败: ' + (e.message || '');
+      } finally {
+        this.diffLoading = false;
       }
-    },
-    async compareSnapshots(snapshot1, snapshot2) {
-      this.diffDrawerVisible = true
-      this.diffResult = await repositoryService.diffSnapshots(this.repositoryId, snapshot1.id, snapshot2.id)
-      // 重置分页和搜索
-      this.diffCurrentPage = 1
-      this.diffSearchKeyword = ''
-      this.diffTypeFilter = ''
-    },
-    // parseDiffResult() {
-    //   try {
-    //     const lines = this.diffResult.trim().split('\n');
-    //     const changes = [];
-    //     let statistics = null;
-
-    //     lines.forEach(line => {
-    //       if (!line) return;
-
-    //       try {
-    //         const item = JSON.parse(line);
-    //         if (item.message_type === 'change') {
-    //           changes.push(item);
-    //         } else if (item.message_type === 'statistics') {
-    //           statistics = item;
-    //         }
-    //       } catch (e) {
-    //         // 忽略解析错误的行
-    //       }
-    //     });
-
-    //     this.parsedDiffData = changes;
-    //     this.diffStatistics = statistics;
-    //   } catch (e) {
-    //     console.error('解析差异结果失败:', e);
-    //   }
-    // },
-    getModifierType(modifier) {
-      if (modifier.includes('+')) return 'success'; // 新增
-      if (modifier.includes('-')) return 'danger';  // 删除
-      if (modifier.includes('M')) return 'warning'; // 修改
-      if (modifier.includes('T')) return 'info';    // 类型变更
-      if (modifier.includes('U')) return 'info';    // 元数据变更
-      if (modifier.includes('?')) return 'info';    // 位腐坏
-      return 'info';
-    },
-    getModifierLabel(modifier) {
-      const labels = {
-        '+': '新增',
-        '-': '删除',
-        'M': '修改',
-        'T': '类型变更',
-        'U': '元数据变更',
-        '?': '位腐坏'
-      };
-
-      return modifier.split('').map(char => labels[char] || char).join(',');
     },
     performRestore() {
-      // 子类需要实现具体的恢复逻辑
-      this.$emit('restore-snapshot', {
-        repositoryId: this.repositoryId,
-        snapshot: this.restoreItem,
-        targetPath: this.restoreForm.path
-      })
-      this.restoreDialogVisible = false
+      this.$emit('restore-snapshot', { repositoryId: this.repositoryId, snapshot: this.restoreItem, targetPath: this.restoreForm.path, verify: this.restoreForm.verify });
+      this.restoreDialogVisible = false;
     },
     performDelete() {
-      // 子类需要实现具体的删除逻辑
-      this.$emit('delete-snapshot', {
-        repositoryId: this.repositoryId,
-        snapshot: this.deleteItem
-      })
-      this.deleteDialogVisible = false
+      this.$emit('delete-snapshot', { repositoryId: this.repositoryId, snapshot: this.deleteItem });
+      this.deleteDialogVisible = false;
+    },
+    onEditTags(snapshot) {
+      this.tagItem = snapshot;
+      this.tagList = [...(snapshot.tags || [])];
+      this.tagInputVisible = false;
+      this.tagInputValue = '';
+      this.tagDialogVisible = true;
+    },
+    showTagInput() {
+      this.tagInputVisible = true;
+      this.$nextTick(() => {
+        const input = this.$refs.tagInput;
+        if (input) input.focus();
+      });
+    },
+    confirmTagInput() {
+      const val = (this.tagInputValue || '').trim();
+      if (val && !this.tagList.includes(val)) {
+        this.tagList.push(val);
+      }
+      this.tagInputVisible = false;
+      this.tagInputValue = '';
+    },
+    removeTag(tag) {
+      this.tagList = this.tagList.filter(t => t !== tag);
+    },
+    async saveTags() {
+      if (!this.tagItem) return;
+      let res;
+      try {
+        res = await repositoryService.setSnapshotTags(this.repositoryId, this.tagItem.id, this.tagList);
+      } catch (e) {
+        Message.error(e.response?.data?.message || e.message || '');
+        return;
+      }
+      this.tagSaving = true;
+      this.$store.dispatch('tasks/noteSubmitted', res.taskId);
+      try {
+        const task = await pollTask(res.taskId, { shouldStop: () => this._destroyed });
+        if (this._destroyed) return;
+        if (task.status === 'Succeeded') {
+          Message.success('标签已更新');
+          this.tagDialogVisible = false;
+          this.$emit('tags-updated');
+        } else {
+          Message.error('标签更新失败: ' + (task.error || ''));
+        }
+      } catch (e) {
+        if (e.message !== 'cancelled') Message.error('标签更新失败: ' + (e.message || ''));
+      } finally {
+        this.tagSaving = false;
+      }
     },
     formatFileSize(bytes) {
-      if (bytes === 0) return '0 Bytes'
-      const k = 1024
-      const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB']
-      const i = Math.floor(Math.log(bytes) / Math.log(k))
-      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+      if (!bytes) return '0 B';
+      const k = 1024, units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + units[i];
     },
-    formatDuration(endTime, startTime) {
-      if (!endTime || !startTime) return 'N/A'
-
-      const start = new Date(startTime)
-      const end = new Date(endTime)
-      const durationMs = end - start
-
-      if (durationMs < 0) {
-        return '无效时间'
-      }
-
-      const seconds = Math.floor(durationMs / 1000)
-      const minutes = Math.floor(seconds / 60)
-      const hours = Math.floor(minutes / 60)
-
-      if (hours > 0) {
-        return `${hours}h ${minutes % 60}m ${seconds % 60}s`
-      } else if (minutes > 0) {
-        return `${minutes}m ${seconds % 60}s`
-      } else {
-        return `${seconds}s`
-      }
+    formatDuration(end, start) {
+      if (!end || !start) return 'N/A';
+      const ms = new Date(end) - new Date(start);
+      if (ms < 0) return '无效';
+      const s = Math.floor(ms / 1000), m = Math.floor(s / 60), h = Math.floor(m / 60);
+      if (h) return `${h}h${m % 60}m`;
+      if (m) return `${m}m${s % 60}s`;
+      return `${s}s`;
     },
-    isSelected(snapshot) {
-      return this.selectedSnapshots.some(s => s.id === snapshot.id)
+    formatShortTime(t) {
+      if (!t) return '-';
+      return new Date(t).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+    },
+    formatFullTime(t) {
+      if (!t) return '-';
+      return new Date(t).toLocaleString('zh-CN', { hour12: false });
+    },
+    getModifierType(m) {
+      if (!m) return 'info';
+      if (m.includes('+')) return 'success';
+      if (m.includes('-')) return 'danger';
+      if (m.includes('M')) return 'warning';
+      return 'info';
+    },
+    getModifierLabel(m) {
+      const map = { '+': '新增', '-': '删除', M: '修改', T: '类型', U: '元数据', '?': '损坏' };
+      return (m || '').split('').map(c => map[c] || c).join(',');
     }
-  },
-  beforeDestroy() {
-    // 清理添加的属性
-    this.snapshots.forEach(snapshot => {
-      if ('checked' in snapshot) {
-        this.$delete(snapshot, 'checked');
-      }
-    });
   }
+};
+
+function formatTime(t) {
+  if (!t) return '-';
+  return new Date(t).toLocaleString('zh-CN');
 }
 </script>
 
 <style scoped>
 .snapshot-toolbar {
-  margin-bottom: 15px;
-}
-
-.snapshot-summary-card {
-  margin-left: 50px;
-  margin-right: 50px;
-  margin-top: 10px;
-  margin-bottom: 10px;
-}
-
-.summary-item {
   display: flex;
   justify-content: space-between;
-  padding: 5px 0;
+  align-items: center;
+  margin-bottom: 16px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.toolbar-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.toolbar-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.toolbar-search { width: 280px; max-width: 100%; }
+
+.snapshot-id {
+  font-size: 11px;
+  color: var(--color-text-secondary);
+  padding: 1px 6px;
+  background: var(--color-bg-soft);
+  border-radius: 4px;
+}
+.table-tag { margin-right: 4px; margin-bottom: 2px; }
+
+.tag-editor { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.tag-editor__tag { margin: 0; }
+.tag-editor__input { width: 120px; }
+
+/* 批量删除对话框 */
+.batch-delete-list {
+  margin-top: 14px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: var(--color-bg-soft);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+}
+.batch-delete-item {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 0;
+  font-size: 13px;
 }
 
-.summary-label {
-  font-weight: bold;
-  color: #606266;
+/* 空状态 */
+.empty { text-align: center; padding: 60px 20px; }
+.empty--small { padding: 30px 20px; }
+.empty__title { font-size: 16px; font-weight: 600; color: var(--color-text-primary); }
+.empty__desc { font-size: 13px; color: var(--color-text-secondary); margin-top: 4px; }
+
+/* 删除对话框元数据 */
+.delete-meta {
+  margin-top: 16px;
+  background: var(--color-bg-soft);
+  border-radius: var(--radius-md);
+  padding: 14px;
+}
+.delete-meta > div {
+  display: flex;
+  justify-content: space-between;
+  padding: 6px 0;
+  font-size: 13px;
 }
 
-.summary-value {
-  color: #909399;
-}
+/* 差异抽屉 */
+.diff-drawer { padding: 16px; }
+.diff-loading { min-height: 200px; }
 
-.files-total {
-  color: #409EFF;
-  font-weight: bold;
+.diff-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
 }
-
-.files-new {
-  color: #67C23A;
-  font-weight: bold;
+.diff-stat {
+  text-align: center;
+  padding: 16px;
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-soft);
 }
-
-.files-changed {
-  color: #E6A23C;
-  font-weight: bold;
+.diff-stat--total { background: var(--brand-50); }
+.diff-stat--add { background: var(--success-50); }
+.diff-stat--remove { background: var(--danger-50); }
+.diff-stat__num {
+  font-size: 26px;
+  font-weight: 700;
+  color: var(--color-text-primary);
 }
-
-.size-total {
-  color: #909399;
-  font-weight: bold;
-}
-
-.dialog-footer {
-  text-align: right;
-}
-
-.form-tip {
-  margin-top: 5px;
+.diff-stat__label {
   font-size: 12px;
-  color: #909399;
+  color: var(--color-text-secondary);
+  margin-top: 4px;
 }
 
-.diff-result-card {
-  height: 100%;
-  overflow-y: auto;
-  flex: 1;
+.diff-toolbar {
   display: flex;
-  flex-direction: column;
+  gap: 10px;
+  align-items: center;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
 }
 
-.diff-result-card ::v-deep .el-card__body {
-  flex: 1;
+.snapshot-pagination {
+  margin-top: 18px;
+  padding: 14px 0 6px;
   display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  height: 100%;
+  justify-content: flex-end;
 }
 
-.diff-result {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-}
-
-.diff-result>.el-card {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.diff-result>.el-card ::v-deep .el-card__body {
-  flex: 1;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-}
-
-.diff-drawer-content {
-  height: 100%;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.stat-item {
-  display: flex;
-  justify-content: space-between;
-}
-
-.stat-label {
-  color: #606266;
-}
-
-.stat-value {
-  color: #909399;
+@media (max-width: 768px) {
+  .snapshot-pagination { justify-content: center; }
 }
 </style>
