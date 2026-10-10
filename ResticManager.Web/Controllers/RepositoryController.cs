@@ -53,8 +53,15 @@ public class RepositoryController : ControllerBase
             return BadRequest(ModelState);
         }
 
-        var createdRepository = await _repositoryService.CreateRepositoryAsync(repository);
-        return CreatedAtAction(nameof(GetRepository), new { id = createdRepository.Id }, createdRepository);
+        try
+        {
+            var createdRepository = await _repositoryService.CreateRepositoryAsync(repository);
+            return CreatedAtAction(nameof(GetRepository), new { id = createdRepository.Id }, createdRepository);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
     }
 
     [HttpPut("{id}")]
@@ -69,6 +76,10 @@ public class RepositoryController : ControllerBase
         {
             var updatedRepository = await _repositoryService.UpdateRepositoryAsync(id, repository);
             return Ok(updatedRepository);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
         }
         catch (Exception)
         {

@@ -10,6 +10,7 @@ using ResticManager.Application.Utils;
 using ResticManager.Data;
 using ResticManager.Models;
 using ResticManager.Sqlite;
+using ResticManager.Web.Logging;
 using ResticManager.Web.Middleware;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -146,6 +147,25 @@ builder.Services.AddSwaggerGen();
 // 添加日志服务
 builder.Services.AddLogging();
 
+// 文件日志：按天滚动写入 data/logs/（JSON Lines 格式），供"系统日志"页面查询
+var fileLogOptions = FileLoggerOptions.FromConfiguration(builder.Configuration);
+builder.Services.AddSingleton(fileLogOptions);
+if (fileLogOptions.Enabled)
+{
+    builder.Logging.AddProvider(new FileLoggerProvider(fileLogOptions));
+
+    // 旧配置文件没有 Logging:File:LogLevel 节时，文件级别会落到全局 Default（Warning），
+    // 这里兜底：文件记录 Information 及以上，Microsoft 类别压到 Warning（防请求日志刷屏）
+    if (!builder.Configuration.GetSection("Logging:File:LogLevel").Exists())
+    {
+        builder.Logging.AddFilter<FileLoggerProvider>("*", LogLevel.Information);
+        builder.Logging.AddFilter<FileLoggerProvider>("Microsoft", LogLevel.Warning);
+    }
+}
+
+// 系统日志查询服务
+builder.Services.AddSingleton<SystemLogReader>();
+
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
@@ -269,10 +289,22 @@ static void CreateDefaultAppSettings(string appSettingsPath)
         },
         Logging = new
         {
+            // 控制台日志：默认 Warning（框架类别的信息日志较吵，未配置时由 Default 兜底）
             LogLevel = new
             {
-                Default = "Warning",
-                Microsoft_AspNetCore = "Warning"
+                Default = "Warning"
+            },
+            // 文件日志：Information 级写入 data/logs/，供"系统日志"页面查询
+            File = new
+            {
+                Enabled = true,
+                Directory = "data/logs",
+                RetainDays = 15,
+                LogLevel = new
+                {
+                    Default = "Information",
+                    Microsoft = "Warning"
+                }
             }
         },
         AllowedHosts = "*"
