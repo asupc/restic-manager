@@ -353,6 +353,9 @@ namespace ResticManager.Sqlite.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("CredentialsJson")
+                        .HasColumnType("TEXT");
+
                     b.Property<bool>("IsInitialized")
                         .HasColumnType("INTEGER");
 

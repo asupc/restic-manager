@@ -36,6 +36,8 @@ public class SqliteDbContext : ResticManagerDbContext
             entity.Property(e => e.Path).IsRequired();
             entity.Property(e => e.Password).IsRequired();
             entity.Property(e => e.Type).IsRequired().HasMaxLength(20);
+            // 后端凭据 JSON 不限长
+            entity.Property(e => e.CredentialsJson);
             // 统计结果 JSON 不限长
             entity.Property(e => e.StatsJson);
         });

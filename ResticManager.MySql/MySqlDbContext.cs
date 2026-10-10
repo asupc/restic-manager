@@ -37,6 +37,8 @@ public class MySqlDbContext : ResticManagerDbContext
             entity.Property(e => e.Path).IsRequired();
             entity.Property(e => e.Password).IsRequired();
             entity.Property(e => e.Type).IsRequired().HasMaxLength(20);
+            // 后端凭据 JSON 不限长
+            entity.Property(e => e.CredentialsJson);
         });
 
         // 配置BackupRule实体
