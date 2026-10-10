@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Quartz;
 using Quartz.Impl;
 using Quartz.Spi;
@@ -15,12 +16,14 @@ public class QuartzSchedulerService : IHostedService
 {
     private readonly IServiceProvider _serviceProvider;
     private readonly IConfiguration _configuration;
+    private readonly ILogger<QuartzSchedulerService> _logger;
     private IScheduler _scheduler;
 
-    public QuartzSchedulerService(IServiceProvider serviceProvider, IConfiguration configuration)
+    public QuartzSchedulerService(IServiceProvider serviceProvider, IConfiguration configuration, ILogger<QuartzSchedulerService> logger)
     {
         _serviceProvider = serviceProvider;
         _configuration = configuration;
+        _logger = logger;
     }
 
     private async Task InitScheduler()
@@ -44,11 +47,11 @@ public class QuartzSchedulerService : IHostedService
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
-        Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 开始启动 Quartz 调度器");
+        _logger.LogInformation("正在启动 Quartz 调度器");
         await InitScheduler();
         // 启动调度器
         await _scheduler.Start(cancellationToken);
-        Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Quartz 调度器启动完成");
+        _logger.LogInformation("Quartz 调度器启动完成");
 
         // 注册任务和触发器
         await ScheduleAllTasks(cancellationToken);
@@ -56,18 +59,18 @@ public class QuartzSchedulerService : IHostedService
         await ScheduleHealthCheckJob(cancellationToken);
         // 注册定时维护任务（按设置页配置）
         await ScheduleMaintenanceSettings(cancellationToken);
-        Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 所有任务调度完成");
+        _logger.LogInformation("所有任务调度完成");
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 开始停止 Quartz 调度器");
+        _logger.LogInformation("正在停止 Quartz 调度器");
 
         if (_scheduler != null)
         {
             await _scheduler.Shutdown(cancellationToken);
         }
-        Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] Quartz 调度器已停止");
+        _logger.LogInformation("Quartz 调度器已停止");
     }
 
     private async Task ScheduleAllTasks(CancellationToken cancellationToken)
@@ -78,7 +81,7 @@ public class QuartzSchedulerService : IHostedService
             var taskService = scope.ServiceProvider.GetRequiredService<IBackupTaskService>();
             var tasks = await taskService.GetEnabledTasksAsync();
 
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 开始调度 {tasks.Count} 个启用的任务");
+            _logger.LogInformation("开始调度 {Count} 个启用的备份任务", tasks.Count);
 
             foreach (var task in tasks)
             {
@@ -88,26 +91,25 @@ public class QuartzSchedulerService : IHostedService
                 }
                 else
                 {
-                    Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 任务 {task.Name} 没有 Cron 表达式，跳过调度");
+                    _logger.LogWarning("任务 {TaskName} 未配置 Cron 表达式，跳过调度", task.Name);
                 }
             }
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 调度任务时发生错误: {ex.Message}");
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 异常详情: {ex}");
+            _logger.LogError(ex, "调度备份任务时发生错误");
         }
     }
 
     public async Task ScheduleTask(BackupTask task, CancellationToken cancellationToken)
     {
         await InitScheduler();
-        Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] ScheduleTask：{task.Name}，Cron：{task.CronExpression}");
-        
+        _logger.LogInformation("调度备份任务 {TaskName}，Cron：{Cron}", task.Name, task.CronExpression);
+
         // 验证 Cron 表达式是否有效
         if (!CronExpression.IsValidExpression(task.CronExpression))
         {
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 无效的 Cron 表达式: {task.CronExpression}");
+            _logger.LogWarning("无效的 Cron 表达式：{Cron}（任务 {TaskName}）", task.CronExpression, task.Name);
             return;
         }
         
@@ -132,13 +134,13 @@ public class QuartzSchedulerService : IHostedService
         }
 
         await _scheduler.ScheduleJob(jobDetail, trigger, cancellationToken);
-        Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 任务 {task.Name} 已调度，Cron表达式: {task.CronExpression}，时区: {TimeZoneInfo.Local.DisplayName}");
-        
+        _logger.LogInformation("任务 {TaskName} 已调度，Cron：{Cron}，时区：{TimeZone}", task.Name, task.CronExpression, TimeZoneInfo.Local.DisplayName);
+
         // 验证下一次执行时间
         var nextFireTime = trigger.GetNextFireTimeUtc();
         if (nextFireTime.HasValue)
         {
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 任务 {task.Name} 下一次执行时间: {nextFireTime.Value.ToLocalTime()}");
+            _logger.LogInformation("任务 {TaskName} 下一次执行时间：{NextFireTime}", task.Name, nextFireTime.Value.ToLocalTime());
         }
     }
 
@@ -151,7 +153,7 @@ public class QuartzSchedulerService : IHostedService
         if (await _scheduler.CheckExists(jobKey, cancellationToken))
         {
             await _scheduler.DeleteJob(jobKey, cancellationToken);
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 任务 {taskId} 已移除");
+            _logger.LogInformation("备份任务 {TaskId} 的调度已移除", taskId);
         }
     }
 
@@ -178,7 +180,7 @@ public class QuartzSchedulerService : IHostedService
         var cron = _configuration["HealthCheck:Cron"] ?? "0 0 3 * * ?";
         if (!CronExpression.IsValidExpression(cron))
         {
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 健康检查 Cron 表达式无效，使用默认值: {cron}");
+            _logger.LogWarning("健康检查 Cron 表达式无效：{Cron}，使用默认值", cron);
             cron = "0 0 3 * * ?";
         }
 
@@ -200,7 +202,7 @@ public class QuartzSchedulerService : IHostedService
         await _scheduler.ScheduleJob(jobDetail, trigger, cancellationToken);
 
         var nextFireTime = trigger.GetNextFireTimeUtc();
-        Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 仓库健康检查 Job 已注册，Cron：{cron}，下次执行：{nextFireTime?.ToLocalTime()}");
+        _logger.LogInformation("仓库健康检查 Job 已注册，Cron：{Cron}，下次执行：{NextFireTime}", cron, nextFireTime?.ToLocalTime());
     }
 
     /// <summary>
@@ -222,8 +224,7 @@ public class QuartzSchedulerService : IHostedService
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 调度定时维护任务时发生错误: {ex.Message}");
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 异常详情: {ex}");
+            _logger.LogError(ex, "调度定时维护任务时发生错误");
         }
     }
 
@@ -236,7 +237,7 @@ public class QuartzSchedulerService : IHostedService
 
         if (!CronExpression.IsValidExpression(setting.CronExpression))
         {
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 维护任务 {setting.Type} 的 Cron 表达式无效: {setting.CronExpression}，跳过调度");
+            _logger.LogWarning("维护任务 {Type} 的 Cron 表达式无效：{Cron}，跳过调度", setting.Type, setting.CronExpression);
             return;
         }
 
@@ -259,7 +260,7 @@ public class QuartzSchedulerService : IHostedService
         await _scheduler.ScheduleJob(jobDetail, trigger, cancellationToken);
 
         var nextFireTime = trigger.GetNextFireTimeUtc();
-        Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 定时维护 {setting.Type} 已注册，Cron：{setting.CronExpression}，下次执行：{nextFireTime?.ToLocalTime()}");
+        _logger.LogInformation("定时维护 {Type} 已注册，Cron：{Cron}，下次执行：{NextFireTime}", setting.Type, setting.CronExpression, nextFireTime?.ToLocalTime());
     }
 
     /// <summary>

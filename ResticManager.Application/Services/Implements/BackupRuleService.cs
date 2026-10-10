@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using ResticManager.Application.Services.Abstractions;
 using ResticManager.Data;
 using ResticManager.Models;
@@ -8,10 +9,12 @@ namespace ResticManager.Application.Services.Implements;
 public class BackupRuleService : IBackupRuleService
 {
     private readonly ResticManagerDbContext _context;
+    private readonly ILogger<BackupRuleService> _logger;
 
-    public BackupRuleService(ResticManagerDbContext context)
+    public BackupRuleService(ResticManagerDbContext context, ILogger<BackupRuleService> logger)
     {
         _context = context;
+        _logger = logger;
     }
 
     public async Task<List<BackupRule>> GetAllRules()
@@ -31,6 +34,7 @@ public class BackupRuleService : IBackupRuleService
         rule.UpdatedAt = DateTime.Now;
         _context.BackupRules.Add(rule);
         await _context.SaveChangesAsync();
+        _logger.LogInformation("备份规则已创建：{RuleId} {RuleName}", rule.Id, rule.Name);
         return rule;
     }
 
@@ -52,6 +56,7 @@ public class BackupRuleService : IBackupRuleService
         existingRule.UpdatedAt = DateTime.Now;
 
         await _context.SaveChangesAsync();
+        _logger.LogInformation("备份规则已更新：{RuleId} {RuleName}", existingRule.Id, existingRule.Name);
         return existingRule;
     }
 
@@ -62,6 +67,7 @@ public class BackupRuleService : IBackupRuleService
 
         _context.BackupRules.Remove(rule);
         await _context.SaveChangesAsync();
+        _logger.LogInformation("备份规则已删除：{RuleId} {RuleName}", id, rule.Name);
         return true;
     }
 }

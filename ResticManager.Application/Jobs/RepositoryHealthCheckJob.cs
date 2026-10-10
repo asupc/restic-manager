@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Quartz;
 using ResticManager.Application.Services.Abstractions;
 
@@ -13,15 +14,17 @@ public class RepositoryHealthCheckJob : IJob
     public const string JobKeyName = "RepositoryHealthCheckJob";
 
     private readonly IServiceProvider _serviceProvider;
+    private readonly ILogger<RepositoryHealthCheckJob> _logger;
 
-    public RepositoryHealthCheckJob(IServiceProvider serviceProvider)
+    public RepositoryHealthCheckJob(IServiceProvider serviceProvider, ILogger<RepositoryHealthCheckJob> logger)
     {
         _serviceProvider = serviceProvider;
+        _logger = logger;
     }
 
     public async Task Execute(IJobExecutionContext context)
     {
-        Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 开始执行全量仓库健康检查");
+        _logger.LogInformation("开始执行全量仓库健康检查");
         var cancellationToken = context.CancellationToken;
 
         using var scope = _serviceProvider.CreateScope();
@@ -32,11 +35,11 @@ public class RepositoryHealthCheckJob : IJob
             var records = await healthService.CheckAllRepositoriesAsync("Scheduled");
             var passed = records.Count(r => r.Status == "Passed");
             var failed = records.Count(r => r.Status == "Failed");
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 仓库健康检查完成：{records.Count} 个仓库，通过 {passed}，失败 {failed}");
+            _logger.LogInformation("仓库健康检查完成：共 {Total}，通过 {Passed}，失败 {Failed}", records.Count, passed, failed);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 仓库健康检查执行出错: {ex}");
+            _logger.LogError(ex, "仓库健康检查执行失败");
             throw new JobExecutionException("仓库健康检查执行失败", ex, false);
         }
     }

@@ -47,7 +47,7 @@ public class RepositoryHealthCheckService : IRepositoryHealthCheckService
         var stopwatch = Stopwatch.StartNew();
         try
         {
-            var output = await _resticService.CheckRepositoryAsync(repository.Path, repository.Password);
+            var output = await _resticService.CheckRepositoryAsync(repository);
             stopwatch.Stop();
 
             record.Status = "Passed";

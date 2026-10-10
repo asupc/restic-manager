@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using ResticManager.Application.Services.Abstractions;
 using ResticManager.Data;
 using ResticManager.Models;
@@ -9,11 +10,13 @@ namespace ResticManager.Application.Services.Implements;
 public class BackupRecordService : IBackupRecordService
 {
     private readonly ResticManagerDbContext _context;
+    private readonly ILogger<BackupRecordService> _logger;
     //private readonly IBackupTaskService _taskService; // 用于校验任务存在性
 
-    public BackupRecordService(ResticManagerDbContext context)
+    public BackupRecordService(ResticManagerDbContext context, ILogger<BackupRecordService> logger)
     {
         _context = context;
+        _logger = logger;
     }
 
     /// <summary>
@@ -115,6 +118,7 @@ public class BackupRecordService : IBackupRecordService
         record.Status = string.IsNullOrEmpty(record.Status) ? "Running" : record.Status;
         _context.BackupRecords.Add(record);
         await _context.SaveChangesAsync();
+        _logger.LogInformation("备份记录已创建：{RecordId}（任务 {TaskId}）", record.Id, record.BackupTaskId);
         return record;
     }
 
@@ -134,6 +138,7 @@ public class BackupRecordService : IBackupRecordService
         existingRecord.Output = updatedRecord.Output;
         existingRecord.BackupTaskId = updatedRecord.BackupTaskId; // 允许修改关联的任务
         await _context.SaveChangesAsync();
+        _logger.LogInformation("备份记录已更新：{RecordId}", existingRecord.Id);
         return existingRecord;
     }
 
@@ -148,6 +153,7 @@ public class BackupRecordService : IBackupRecordService
 
         _context.BackupRecords.Remove(record);
         await _context.SaveChangesAsync();
+        _logger.LogInformation("备份记录已删除：{RecordId}", id);
         return true;
     }
 

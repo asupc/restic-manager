@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Quartz;
 using ResticManager.Application.Services.Abstractions;
 
@@ -12,10 +13,12 @@ namespace ResticManager.Application.Jobs;
 public class MaintenanceJob : IJob
 {
     private readonly IServiceProvider _serviceProvider;
+    private readonly ILogger<MaintenanceJob> _logger;
 
-    public MaintenanceJob(IServiceProvider serviceProvider)
+    public MaintenanceJob(IServiceProvider serviceProvider, ILogger<MaintenanceJob> logger)
     {
         _serviceProvider = serviceProvider;
+        _logger = logger;
     }
 
     public async Task Execute(IJobExecutionContext context)
@@ -27,7 +30,7 @@ public class MaintenanceJob : IJob
             throw new JobExecutionException($"未知的维护类型: {type}");
         }
 
-        Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 开始定时维护：{def.Type}");
+        _logger.LogInformation("开始定时维护：{Type}", def.Type);
         var submitted = 0;
         var skipped = 0;
 
@@ -57,11 +60,11 @@ public class MaintenanceJob : IJob
                 }
             }
 
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 定时维护 {def.Type} 登记完成：提交 {submitted} 个仓库，跳过 {skipped} 个");
+            _logger.LogInformation("定时维护 {Type} 登记完成：提交 {Submitted} 个仓库，跳过 {Skipped} 个", def.Type, submitted, skipped);
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 定时维护 {def.Type} 执行出错: {ex}");
+            _logger.LogError(ex, "定时维护 {Type} 执行失败", def.Type);
             throw new JobExecutionException($"定时维护 {def.Type} 执行失败", ex, false);
         }
     }

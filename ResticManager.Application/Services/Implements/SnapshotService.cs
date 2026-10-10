@@ -1,5 +1,6 @@
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using ResticManager.Application.Services.Abstractions;
 using ResticManager.Data;
 using ResticManager.Models;
@@ -15,11 +16,13 @@ public class SnapshotService : ISnapshotService
 {
     private readonly ResticManagerDbContext _context;
     private readonly IResticService _resticService;
+    private readonly ILogger<SnapshotService> _logger;
 
-    public SnapshotService(ResticManagerDbContext context, IResticService resticService)
+    public SnapshotService(ResticManagerDbContext context, IResticService resticService, ILogger<SnapshotService> logger)
     {
         _context = context;
         _resticService = resticService;
+        _logger = logger;
     }
 
     public async Task<List<BackupSnapshot>> GetByRepositoryAsync(int repositoryId, bool includeDeleted = false)
@@ -85,7 +88,7 @@ public class SnapshotService : ISnapshotService
         var syncStartedAt = DateTime.Now;
 
         // 1. 从远端拉全量
-        var remoteList = await _resticService.ListSnapshotsAsync(repository.Path, repository.Password);
+        var remoteList = await _resticService.ListSnapshotsAsync(repository);
         var remoteIds = remoteList.Select(s => s.Id).ToHashSet();
 
         // 2. 一次性加载本地全部行（含已删除），在内存中 diff 后单次提交，
@@ -132,6 +135,10 @@ public class SnapshotService : ISnapshotService
         }
 
         await _context.SaveChangesAsync();
+
+        _logger.LogInformation("快照缓存同步完成（仓库 {RepositoryId}）：远端 {RemoteTotal}，新增 {Added}，更新 {Updated}，标记删除 {MarkedDeleted}",
+            repositoryId, result.RemoteTotal, result.Added, result.Updated, result.MarkedDeleted);
+
         return result;
     }
 
@@ -147,14 +154,13 @@ public class SnapshotService : ISnapshotService
         try
         {
             var snapshots = await _resticService.ListSnapshotsByIdsAsync(
-                repository.Path,
-                repository.Password,
+                repository,
                 new[] { snapshotId });
 
             var info = snapshots.FirstOrDefault();
             if (info == null)
             {
-                Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] IngestNewSnapshotAsync: 远端未找到快照 {snapshotId}");
+                _logger.LogWarning("拉取新快照元数据时远端未找到快照 {SnapshotId}（仓库 {RepositoryId}）", snapshotId, repositoryId);
                 return null;
             }
 
@@ -163,7 +169,7 @@ public class SnapshotService : ISnapshotService
         catch (Exception ex)
         {
             // 远端调用失败仅记录，不抛出
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] IngestNewSnapshotAsync 失败（不影响备份成功状态）: {ex.Message}");
+            _logger.LogError(ex, "拉取新快照元数据失败（不影响备份成功状态），仓库 {RepositoryId}，快照 {SnapshotId}", repositoryId, snapshotId);
             return null;
         }
     }

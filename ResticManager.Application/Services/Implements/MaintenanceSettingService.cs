@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Quartz;
 using ResticManager.Application.Services.Abstractions;
 using ResticManager.Data;
@@ -9,10 +10,12 @@ namespace ResticManager.Application.Services.Implements;
 public class MaintenanceSettingService : IMaintenanceSettingService
 {
     private readonly ResticManagerDbContext _context;
+    private readonly ILogger<MaintenanceSettingService> _logger;
 
-    public MaintenanceSettingService(ResticManagerDbContext context)
+    public MaintenanceSettingService(ResticManagerDbContext context, ILogger<MaintenanceSettingService> logger)
     {
         _context = context;
+        _logger = logger;
     }
 
     public async Task<List<MaintenanceSetting>> GetAllAsync()
@@ -36,6 +39,7 @@ public class MaintenanceSettingService : IMaintenanceSettingService
         setting.CronExpression = cronExpression.Trim();
         setting.UpdatedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync();
+        _logger.LogInformation("维护设置已更新：{Type}，启用：{IsEnabled}，Cron：{Cron}", setting.Type, isEnabled, setting.CronExpression);
         return setting;
     }
 

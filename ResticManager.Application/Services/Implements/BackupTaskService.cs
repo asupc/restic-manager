@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using ResticManager.Application.Services.Abstractions;
 using ResticManager.Data;
 using ResticManager.Models;
@@ -11,16 +12,19 @@ public class BackupTaskService : IBackupTaskService
     private readonly IResticService _resticService;
     private readonly IBackupRecordService _recordService;
     private readonly ISnapshotService _snapshotService;
+    private readonly ILogger<BackupTaskService> _logger;
 
     public BackupTaskService(ResticManagerDbContext context,
         IResticService resticService,
         IBackupRecordService recordService,
-        ISnapshotService snapshotService)
+        ISnapshotService snapshotService,
+        ILogger<BackupTaskService> logger)
     {
         _context = context;
         _resticService = resticService;
         _recordService = recordService;
         _snapshotService = snapshotService;
+        _logger = logger;
     }
 
     public async Task<List<BackupTask>> GetAllTasksAsync()
@@ -43,6 +47,7 @@ public class BackupTaskService : IBackupTaskService
     {
         _context.BackupTasks.Add(task);
         await _context.SaveChangesAsync();
+        _logger.LogInformation("备份任务已创建：{TaskId} {TaskName}", task.Id, task.Name);
         return task;
     }
 
@@ -57,6 +62,7 @@ public class BackupTaskService : IBackupTaskService
         t.CronExpression = task.CronExpression;
         t.BackupRuleId = task.BackupRuleId;
         await _context.SaveChangesAsync();
+        _logger.LogInformation("备份任务已更新：{TaskId} {TaskName}", t.Id, t.Name);
     }
 
     public async Task DeleteTaskAsync(int id)
@@ -66,12 +72,13 @@ public class BackupTaskService : IBackupTaskService
         {
             _context.BackupTasks.Remove(task);
             await _context.SaveChangesAsync();
+            _logger.LogInformation("备份任务已删除：{TaskId} {TaskName}", id, task.Name);
         }
     }
 
     public async Task<int> RunTaskAsync(int taskId)
     {
-        Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] RunTaskAsync 开始执行任务 ID: {taskId}");
+        _logger.LogInformation("开始执行备份任务，ID：{TaskId}", taskId);
         
         var task = await _context.BackupTasks
             .Include(t => t.Repository)
@@ -79,22 +86,22 @@ public class BackupTaskService : IBackupTaskService
             .FirstOrDefaultAsync(t => t.Id == taskId);
 
         if (task == null) {
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 任务 ID: {taskId} 未找到");
+            _logger.LogWarning("备份任务 {TaskId} 未找到", taskId);
             throw new Exception("任务未找到");
         }
 
         // 检查任务是否已经在运行
         if (task.LastRunStatus == "Running") {
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 任务 ID: {taskId} 正在运行中，无法再次启动");
+            _logger.LogWarning("备份任务 {TaskId} 正在运行中，拒绝重复启动", taskId);
             throw new Exception("任务正在运行中，无法再次启动");
         }
 
         if (!task.Repository.IsInitialized) {
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 任务 ID: {taskId} 关联的仓库未初始化");
+            _logger.LogWarning("备份任务 {TaskId} 关联的仓库未初始化", taskId);
             throw new Exception("关联的仓库未初始化");
         }
-        
-        Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 开始执行备份任务：{task.Name}");
+
+        _logger.LogInformation("开始执行备份：{TaskName}，源路径 {SourcePath}", task.Name, task.SourcePath);
         
         // 更新任务状态为运行中
         task.LastRunAt = DateTime.Now;
@@ -125,15 +132,14 @@ public class BackupTaskService : IBackupTaskService
                 excludePatterns = task.Rule.ExcludePatterns;
             }
 
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 调用 ResticService 执行备份");
+            _logger.LogInformation("调用 restic 执行备份（任务 {TaskName}）", task.Name);
             var result = await _resticService.CreateBackupAsync(
                 task.SourcePath,
-                task.Repository.Path,
-                task.Repository.Password,
+                task.Repository,
                 includePatterns,
                 excludePatterns);
 
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 备份执行完成");
+            _logger.LogInformation("备份命令执行完成（任务 {TaskName}）", task.Name);
 
             // 更新备份记录
             record.EndTime = DateTime.Now;
@@ -176,16 +182,16 @@ public class BackupTaskService : IBackupTaskService
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 保留策略后同步快照缓存失败（备份仍然成功）: {ex.Message}");
+                    _logger.LogWarning(ex, "保留策略执行后同步快照缓存失败（备份仍然成功）");
                 }
             }
 
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 任务 ID: {taskId} 执行成功");
+            _logger.LogInformation("备份任务 {TaskId} 执行成功，记录 ID：{RecordId}", taskId, record.Id);
             return record.Id;
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 任务 ID: {taskId} 执行失败: {ex}");
+            _logger.LogError(ex, "备份任务 {TaskId} 执行失败", taskId);
             
             // 更新备份记录错误信息
             record.EndTime = DateTime.Now;
@@ -231,12 +237,11 @@ public class BackupTaskService : IBackupTaskService
                 ? (int?)rule.KeepYearlyCount
                 : null;
 
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 开始按保留策略清理快照: " +
-                $"daily={rule.KeepDailyCount}, weekly={rule.KeepWeeklyCount}, monthly={rule.KeepMonthlyCount}, yearly={(keepYearly?.ToString() ?? "off")}");
+            _logger.LogInformation("开始按保留策略清理快照：daily={Daily}，weekly={Weekly}，monthly={Monthly}，yearly={Yearly}",
+                rule.KeepDailyCount, rule.KeepWeeklyCount, rule.KeepMonthlyCount, keepYearly?.ToString() ?? "off");
 
             await _resticService.PruneSnapshotsAsync(
-                task.Repository.Path,
-                task.Repository.Password,
+                task.Repository,
                 rule.KeepDailyCount,
                 rule.KeepWeeklyCount,
                 rule.KeepMonthlyCount,
@@ -245,7 +250,7 @@ public class BackupTaskService : IBackupTaskService
         catch (Exception ex)
         {
             // 清理失败不影响备份成功状态
-            Console.WriteLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] 保留策略清理失败（备份仍然成功）: {ex.Message}");
+            _logger.LogWarning(ex, "保留策略清理失败（备份仍然成功）");
         }
 
         return true;
