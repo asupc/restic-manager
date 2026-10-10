@@ -15,7 +15,7 @@
                 <el-table-column label="名称" min-width="160">
                     <template slot-scope="scope">
                         <div class="repo-cell">
-                            <div class="repo-cell__icon"><i class="el-icon-box"></i></div>
+                            <div class="repo-cell__icon"><i :class="typeIcon(scope.row.type)"></i></div>
                             <div>
                                 <div class="repo-cell__name">{{ scope.row.name }}</div>
                                 <div class="repo-cell__path">{{ scope.row.path }}</div>
@@ -72,18 +72,51 @@
         </el-card>
 
         <!-- 创建/编辑对话框 -->
-        <el-dialog :visible.sync="dialogVisible" :title="editingRepository ? '编辑仓库' : '新建仓库'" width="560px" :close-on-click-modal="false" append-to-body>
+        <el-dialog :visible.sync="dialogVisible" :title="editingRepository ? '编辑仓库' : '新建仓库'" width="640px" :close-on-click-modal="false" append-to-body>
             <el-form :model="form" :rules="rules" ref="formRef" label-position="top">
                 <el-form-item label="仓库名称" prop="name">
                     <el-input v-model="form.name" placeholder="例如: 主服务器备份"></el-input>
                 </el-form-item>
-                <el-form-item label="仓库路径" prop="path">
-                    <folder-selector v-model="form.path" title="选择仓库路径" placeholder="选择或输入仓库存储路径"></folder-selector>
+                <el-form-item label="仓库类型" prop="type">
+                    <el-select v-model="form.type" style="width: 100%" :disabled="!!editingRepository" @change="handleTypeChange">
+                        <el-option v-for="t in repositoryTypes" :key="t" :label="typeMeta[t].label" :value="t">
+                            <i :class="typeMeta[t].icon" style="margin-right: 8px;"></i>{{ typeMeta[t].label }}
+                        </el-option>
+                    </el-select>
+                    <div class="form-tip"><i class="el-icon-info"></i> {{ currentMeta.desc }}</div>
+                </el-form-item>
+
+                <!-- 本地目录：服务端目录浏览器选择路径 -->
+                <el-form-item v-if="form.type === 'local'" label="仓库路径" prop="locationFields.path" :rules="[{ required: true, message: '请输入仓库路径', trigger: 'blur' }]">
+                    <folder-selector v-model="form.locationFields.path" title="选择仓库路径" placeholder="选择或输入仓库存储路径"></folder-selector>
                     <div class="form-tip"><i class="el-icon-info"></i> 仓库数据将存储在此目录下,请确保有足够磁盘空间</div>
                 </el-form-item>
-                <el-form-item label="仓库密码" prop="password">
-                    <el-input v-model="form.password" type="password" show-password placeholder="设置仓库加密密码"></el-input>
-                    <div class="form-tip"><i class="el-icon-warning"></i> 密码用于加密所有备份数据,<b>请务必牢记</b>,丢失后将无法恢复数据</div>
+
+                <!-- 远程类型：按类型元数据动态渲染 location 字段 -->
+                <el-row :gutter="12" v-else>
+                    <el-col v-for="f in currentMeta.locationFields" :key="f.key" :span="f.span || 12">
+                        <el-form-item :label="f.label" :prop="'locationFields.' + f.key" :rules="[{ required: f.required, message: '请输入' + f.label, trigger: 'blur' }]">
+                            <el-input v-model="form.locationFields[f.key]" :placeholder="f.placeholder"></el-input>
+                        </el-form-item>
+                    </el-col>
+                </el-row>
+                <el-form-item v-if="form.type !== 'local'" label="仓库地址 (--repo)">
+                    <el-input :value="builtLocation || '（填写完成后自动生成）'" readonly></el-input>
+                    <div v-if="typeParseFailed" class="form-tip"><i class="el-icon-warning"></i> 当前仓库地址无法按类型解析,请重新填写后保存</div>
+                </el-form-item>
+
+                <!-- 后端凭据（存入 credentialsJson，键与后端环境变量映射一致） -->
+                <el-row :gutter="12" v-if="currentMeta.credentialFields.length">
+                    <el-col v-for="f in currentMeta.credentialFields" :key="f.key" :span="12">
+                        <el-form-item :label="f.label" :prop="'credentials.' + f.key" :rules="[{ required: f.required, message: '请输入' + f.label, trigger: 'blur' }]">
+                            <el-input v-model="form.credentials[f.key]" :type="f.type === 'password' ? 'password' : 'text'" :show-password="f.type === 'password'" :placeholder="f.placeholder" autocomplete="new-password"></el-input>
+                        </el-form-item>
+                    </el-col>
+                </el-row>
+
+                <el-form-item label="仓库加密密码" prop="password">
+                    <el-input v-model="form.password" type="password" show-password placeholder="设置仓库加密密码" autocomplete="new-password"></el-input>
+                    <div class="form-tip"><i class="el-icon-warning"></i> 密码用于加密所有备份数据,<b>请务必牢记</b>,丢失后将无法恢复数据;与 REST Server 等后端认证密码相互独立</div>
                 </el-form-item>
             </el-form>
             <template #footer>
@@ -100,6 +133,7 @@ import { repositoryService } from '@/services/repository.service';
 import { TASK_TYPES } from '@/services/task.service';
 import { pollTask } from '@/utils/task-poller';
 import FolderSelector from '@/components/FolderSelector.vue';
+import { REPOSITORY_TYPES, REPOSITORY_TYPE_META, buildLocation, parseLocation, typeIcon } from '@/utils/repository-types';
 
 // 后端持久化的统计结果是 JSON 字符串，解析失败时按未统计处理
 function parseStats(json) {
@@ -117,13 +151,26 @@ export default {
             repositories: [],
             dialogVisible: false,
             editingRepository: null,
-            form: { name: '', path: '', password: '', type: 'local' },
+            repositoryTypes: REPOSITORY_TYPES,
+            typeMeta: REPOSITORY_TYPE_META,
+            // locationFields/credentials 按类型动态初始化（整体替换保持响应式），提交前拼装为 path/credentialsJson
+            form: { name: '', type: 'local', password: '', locationFields: {}, credentials: {} },
+            // 编辑回显时已有 path 无法按类型反解析的兜底提示
+            typeParseFailed: false,
             rules: {
                 name: [{ required: true, message: '请输入仓库名称', trigger: 'blur' }],
-                path: [{ required: true, message: '请输入仓库路径', trigger: 'blur' }],
                 password: [{ required: true, message: '请输入仓库密码', trigger: 'blur' }]
             }
         };
+    },
+    computed: {
+        currentMeta() {
+            return this.typeMeta[this.form.type] || this.typeMeta.local;
+        },
+        // 按当前结构化字段实时拼出的完整 restic location（--repo 值），不完整时为空
+        builtLocation() {
+            return buildLocation(this.form.type, this.form.locationFields);
+        }
     },
     async mounted() {
         await this.fetchRepositories();
@@ -205,21 +252,58 @@ export default {
                 this.$set(repo, flag, false);
             }
         },
+        // 切换类型时按新类型元数据重置动态字段（整体替换保持 Vue 2 响应式）
+        handleTypeChange() {
+            const locationFields = {};
+            this.currentMeta.locationFields.forEach(f => { locationFields[f.key] = ''; });
+            const credentials = {};
+            this.currentMeta.credentialFields.forEach(f => { credentials[f.key] = ''; });
+            this.form.locationFields = locationFields;
+            this.form.credentials = credentials;
+            this.typeParseFailed = false;
+            this.$nextTick(() => { this.$refs.formRef && this.$refs.formRef.clearValidate(); });
+        },
         openCreateDialog() {
             this.editingRepository = null;
-            this.form = { name: '', path: '', password: '', type: 'local' };
+            this.form = { name: '', type: 'local', password: '', locationFields: {}, credentials: {} };
+            this.typeParseFailed = false;
             this.dialogVisible = true;
+            this.$nextTick(() => this.handleTypeChange());
         },
         async saveRepository() {
             try {
                 const valid = await this.$refs.formRef.validate();
                 if (!valid) return;
+
+                // 拼装完整 location；local 直接取路径，其余类型按结构化字段生成
+                const path = this.form.type === 'local'
+                    ? (this.form.locationFields.path || '').trim()
+                    : this.builtLocation;
+                if (!path) {
+                    Message.error('请完整填写仓库地址字段');
+                    return;
+                }
+
+                // 收集非空凭据为 credentialsJson（键与后端环境变量映射一致）
+                const cred = {};
+                this.currentMeta.credentialFields.forEach(f => {
+                    const val = (this.form.credentials[f.key] || '').trim();
+                    if (val) cred[f.key] = val;
+                });
+                const payload = {
+                    name: this.form.name,
+                    type: this.form.type,
+                    path,
+                    password: this.form.password,
+                    credentialsJson: Object.keys(cred).length ? JSON.stringify(cred) : null
+                };
+
                 this.saving = true;
                 if (this.editingRepository) {
-                    await repositoryService.updateRepository(this.editingRepository.id, this.form);
+                    await repositoryService.updateRepository(this.editingRepository.id, payload);
                     Message.success('仓库已更新');
                 } else {
-                    await repositoryService.createRepository(this.form);
+                    await repositoryService.createRepository(payload);
                     Message.success('仓库创建成功');
                 }
                 this.dialogVisible = false;
@@ -283,8 +367,32 @@ export default {
         },
         handleEditRepository(repo) {
             this.editingRepository = repo;
-            this.form = { name: repo.name, path: repo.path, password: '', type: repo.type || 'local' };
+            const type = repo.type || 'local';
+            // 尽力把已有 location 反解析回结构化字段；失败时置空并提示重新填写
+            const fields = parseLocation(type, repo.path);
+            this.typeParseFailed = !fields;
+            let credentials = {};
+            if (repo.credentialsJson) {
+                try { credentials = JSON.parse(repo.credentialsJson) || {}; } catch (e) { credentials = {}; }
+            }
+            this.form = { name: repo.name, type, password: '', locationFields: fields || {}, credentials };
+            // 反解析结果只含已填写的键，补齐元数据里的全部字段键（保证 v-model 键存在）；
+            // 不走 handleTypeChange——那会把回显值清空
+            this.$nextTick(() => this.mergeFormFields());
             this.dialogVisible = true;
+        },
+        // 把缺失的动态字段键补为空串（对象整体替换，保持响应式；不清空已回显的值）
+        mergeFormFields() {
+            const locationFields = {};
+            this.currentMeta.locationFields.forEach(f => { locationFields[f.key] = this.form.locationFields[f.key] || ''; });
+            const credentials = {};
+            this.currentMeta.credentialFields.forEach(f => { credentials[f.key] = this.form.credentials[f.key] || ''; });
+            this.form.locationFields = locationFields;
+            this.form.credentials = credentials;
+            this.$nextTick(() => { this.$refs.formRef && this.$refs.formRef.clearValidate(); });
+        },
+        typeIcon(type) {
+            return typeIcon(type);
         },
         formatFileSize(b) {
             if (!b) return '0 B';

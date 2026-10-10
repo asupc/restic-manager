@@ -6,7 +6,7 @@
                 </el-page-header>
                 <div v-if="repository" class="repo-info mt-2">
                     <span class="text-mono text-secondary" style="font-size:12px;">
-                        <i class="el-icon-folder"></i> {{ repository.path }}
+                        <i :class="repoTypeIcon(repository.type)"></i> {{ repository.path }}
                     </span>
                     <span class="rm-badge rm-badge--success" v-if="repository.isInitialized">已初始化</span>
                     <span class="rm-badge rm-badge--warning" v-else>未初始化</span>
@@ -79,6 +79,7 @@ import { Message, MessageBox } from 'element-ui';
 import { repositoryService } from '@/services/repository.service';
 import { TASK_TYPES } from '@/services/task.service';
 import { pollTask } from '@/utils/task-poller';
+import { typeIcon as repoTypeIcon } from '@/utils/repository-types';
 import SnapshotList from '@/components/SnapshotList.vue';
 
 export default {
@@ -100,6 +101,7 @@ export default {
         };
     },
     methods: {
+        repoTypeIcon,
         goBack() { this.$router.go(-1); },
         async fetchSnapshots() {
             const id = this.$route.params.id;

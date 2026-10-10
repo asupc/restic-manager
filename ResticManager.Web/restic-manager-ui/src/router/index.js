@@ -10,6 +10,7 @@ import RepositorySnapshots from "@/views/RepositorySnapshots.vue";
 import SnapshotFiles from "@/views/SnapshotFiles.vue";
 import BackupManagement from "@/views/BackupManagement.vue";
 import BackupRecords from "@/views/BackupRecords.vue";
+import SystemLogs from "@/views/SystemLogs.vue";
 import Settings from "@/views/Settings.vue";
 import { authService } from "@/services/auth.service";
 
@@ -67,6 +68,11 @@ const routes = [
     name: "SnapshotFiles",
     component: SnapshotFiles,
     props: true,
+  },
+  {
+    path: "/logs",
+    name: "SystemLogs",
+    component: SystemLogs,
   },
   {
     path: "/settings",
