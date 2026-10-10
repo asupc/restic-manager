@@ -27,9 +27,15 @@ public class Repository : BaseModel
     public string Password { get; set; } = string.Empty;
 
     /// <summary>
-    /// 仓库类型，默认为local，支持local, sftp, s3等
+    /// 仓库类型，默认为local，支持local/sftp/rest/s3/b2/azure/gs/rclone
     /// </summary>
     public string Type { get; set; } = "local";
+
+    /// <summary>
+    /// 后端凭据 JSON（如 s3 的 accessKey/secretKey），local/sftp/rclone 为空。
+    /// 键名与 ResticEnvironmentBuilder 的环境变量映射一一对应。
+    /// </summary>
+    public string? CredentialsJson { get; set; }
 
     /// <summary>
     /// 仓库创建时间
