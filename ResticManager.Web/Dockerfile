@@ -1,13 +1,13 @@
 # 请参阅 https://aka.ms/customizecontainer 以了解如何自定义调试容器，以及 Visual Studio 如何使用此 Dockerfile 生成映像以更快地进行调试。
 
 # 此阶段用于在快速模式(默认为调试配置)下从 VS 运行时
-FROM mcr.microsoft.com/dotnet/aspnet:10 AS base
+FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS base
 USER $APP_UID
 WORKDIR /app
 EXPOSE 80
 
 # 此阶段用于生成服务项目
-FROM mcr.microsoft.com/dotnet/sdk:10 AS build
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG BUILD_CONFIGURATION=Release
 WORKDIR /src
 COPY ["ResticManager.Web/ResticManager.Web.csproj", "ResticManager.Web/"]
@@ -29,6 +29,11 @@ RUN dotnet publish "./ResticManager.Web.csproj" -c $BUILD_CONFIGURATION -o /app/
 
 # 此阶段在生产中使用，或在常规模式下从 VS 运行时使用(在不使用调试配置时为默认值)
 FROM base AS final
+# COPY 会保留源文件权限位，而 fnOS(trimacl) 检出中 restic 二进制为 000，
+# 不补执行位的话运行时 Process.Start 直接 Permission denied，这里临时用 root 修正
+USER root
 WORKDIR /app
 COPY --from=publish /app/publish .
+RUN chmod 755 /app/restic/0.18.1/restic
+USER $APP_UID
 ENTRYPOINT ["dotnet", "ResticManager.Web.dll"]

@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Identity;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
@@ -72,6 +73,19 @@ builder.Services.AddScoped<IBackupRuleService, BackupRuleService>();
 builder.Services.AddScoped<IRepositoryHealthCheckService, RepositoryHealthCheckService>();
 builder.Services.AddScoped<IMaintenanceSettingService, MaintenanceSettingService>();
 builder.Services.AddScoped<IPasswordHasher<User>, PasswordHasher<User>>();
+
+// DataProtection 密钥持久化到 data/keys（宿主挂载卷）。默认落在容器内临时目录
+// /home/<user>/.aspnet/DataProtection-Keys，容器重建即丢失，已签发的受保护数据全部失效
+var dataProtectionKeyDir = Path.Combine(Directory.GetCurrentDirectory(), "data", "keys");
+Directory.CreateDirectory(dataProtectionKeyDir);
+builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionKeyDir))
+    .SetApplicationName("restic-manager");
+
+// 每仓库互斥锁（Singleton）：AsyncTaskService 后台任务、Quartz 定时备份
+// （RunTaskAsync）与定时/手动健康检查（CheckRepositoryAsync）共用，
+// 防止应用内多条路径同时访问同一 restic 仓库引发后端锁冲突
+builder.Services.AddSingleton<IRepositoryLockManager, RepositoryLockManager>();
 
 // 后台异步任务服务（Singleton + HostedService）：
 // 启动时先做遗留任务清理（标记失败），再启动 Quartz 调度器
