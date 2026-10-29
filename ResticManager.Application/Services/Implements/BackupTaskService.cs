@@ -12,18 +12,21 @@ public class BackupTaskService : IBackupTaskService
     private readonly IResticService _resticService;
     private readonly IBackupRecordService _recordService;
     private readonly ISnapshotService _snapshotService;
+    private readonly IRepositoryLockManager _repositoryLockManager;
     private readonly ILogger<BackupTaskService> _logger;
 
     public BackupTaskService(ResticManagerDbContext context,
         IResticService resticService,
         IBackupRecordService recordService,
         ISnapshotService snapshotService,
+        IRepositoryLockManager repositoryLockManager,
         ILogger<BackupTaskService> logger)
     {
         _context = context;
         _resticService = resticService;
         _recordService = recordService;
         _snapshotService = snapshotService;
+        _repositoryLockManager = repositoryLockManager;
         _logger = logger;
     }
 
@@ -120,6 +123,11 @@ public class BackupTaskService : IBackupTaskService
         _context.BackupRecords.Add(record);
         await _context.SaveChangesAsync();
 
+        // 每仓库互斥：备份全程（含保留策略与快照同步）持锁，与 AsyncTaskService 的
+        // 后台任务、定时健康检查共用同一把锁。Quartz 定时与本方法直连（不经任务队列），
+        // 若不在此取锁，定时备份会与同时刻的 restic check 竞争后端锁直接失败。
+        await using var repoLock = await _repositoryLockManager.AcquireAsync(task.RepositoryId);
+
         try
         {
             // 执行备份
@@ -140,6 +148,14 @@ public class BackupTaskService : IBackupTaskService
                 excludePatterns);
 
             _logger.LogInformation("备份命令执行完成（任务 {TaskName}）", task.Name);
+
+            // CreateBackupAsync 失败时不抛异常、只返回 Success=false（如 restic 锁冲突、
+            // 仓库不可达）。必须在此显式判定并走失败路径，否则失败会被当成成功落库，
+            // 且后续保留策略/快照同步仍会执行，对已锁定的仓库产生连锁失败。
+            if (!result.Success)
+            {
+                throw new Exception(result.Error ?? "备份失败");
+            }
 
             // 更新备份记录
             record.EndTime = DateTime.Now;

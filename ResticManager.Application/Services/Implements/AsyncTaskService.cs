@@ -1,4 +1,3 @@
-using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
@@ -17,9 +16,11 @@ namespace ResticManager.Application.Services.Implements;
 /// 一条 Pending 任务后立即返回任务 ID），实际执行由 Task.Run 在后台完成。
 ///
 /// 并发控制：全局信号量限制同时在跑的 restic 进程数；每个仓库一把信号量串行化对同一
-/// 仓库的访问（restic 仓库并发读写会产生锁冲突，网盘仓库尤其敏感）。
-/// RepositoryUnlock 例外：它是解除仓库死锁的工具，不能被同仓库的其它任务阻塞，
-/// 因此不取仓库信号量、也不做防重入拒绝。
+/// 仓库的访问（restic 仓库并发读写会产生锁冲突，网盘仓库尤其敏感），信号量由
+/// IRepositoryLockManager 统一持有，与 Quartz 定时备份/健康检查共用。
+/// 例外：RepositoryUnlock 是解除仓库死锁的工具，不能被同仓库的其它任务阻塞，
+/// 不取仓库信号量、也不做防重入拒绝；BackupRun 与 RepositoryCheck 的仓库锁
+/// 由服务方法内部获取（见 TryAcquireRepoLockAsync 注释）。
 ///
 /// 同时实现 IHostedService：启动时把上次进程退出遗留的 Pending/Running 任务标记为失败，
 /// 并复位备份任务侧的状态位（详见 CleanUpOnStartupAsync）。
@@ -34,17 +35,18 @@ public class AsyncTaskService : IAsyncTaskService, IHostedService
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
 
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly IRepositoryLockManager _repositoryLockManager;
     private readonly ILogger<AsyncTaskService> _logger;
 
     /// <summary>全局并发闸：避免多个仓库的任务同时打满网盘带宽/连接数</summary>
     private static readonly SemaphoreSlim GlobalGate = new(3, 3);
 
-    /// <summary>每仓库一把锁：串行化对同一 restic 仓库的访问，防锁冲突。条目不回收（仓库数量有限）</summary>
-    private static readonly ConcurrentDictionary<int, SemaphoreSlim> RepoLocks = new();
-
-    public AsyncTaskService(IServiceScopeFactory scopeFactory, ILogger<AsyncTaskService> logger)
+    public AsyncTaskService(IServiceScopeFactory scopeFactory,
+        IRepositoryLockManager repositoryLockManager,
+        ILogger<AsyncTaskService> logger)
     {
         _scopeFactory = scopeFactory;
+        _repositoryLockManager = repositoryLockManager;
         _logger = logger;
     }
 
@@ -248,9 +250,7 @@ public class AsyncTaskService : IAsyncTaskService, IHostedService
             {
                 await SetStatusRunningAsync(taskId);
 
-                var repoLock = GetRepoLock(task.Type, task.RepositoryId);
-                if (repoLock != null)
-                    await repoLock.WaitAsync();
+                var repoLockHandle = await TryAcquireRepoLockAsync(task);
                 try
                 {
                     var stopwatch = Stopwatch.StartNew();
@@ -270,7 +270,8 @@ public class AsyncTaskService : IAsyncTaskService, IHostedService
                 }
                 finally
                 {
-                    repoLock?.Release();
+                    if (repoLockHandle != null)
+                        await repoLockHandle.DisposeAsync();
                 }
             }
             finally
@@ -293,14 +294,20 @@ public class AsyncTaskService : IAsyncTaskService, IHostedService
     }
 
     /// <summary>
-    /// 解锁仓库是恢复手段，不能被同仓库其它任务阻塞，因此不取仓库锁。
-    /// 无仓库关联的任务也无需仓库锁。
+    /// 按任务类型决定是否在此层获取仓库锁，返回 null 表示不取：
+    /// - RepositoryUnlock 是恢复手段，不能被同仓库其它任务阻塞；
+    /// - BackupRun 与 RepositoryCheck 的仓库锁由服务方法内部获取
+    ///   （RunTaskAsync / CheckRepositoryAsync 还会被 Quartz 直连调用，锁必须在
+    ///   服务层才能同时覆盖两条路径），此处再取会造成信号量重入死锁；
+    /// - 无仓库关联的任务无需仓库锁。
     /// </summary>
-    private static SemaphoreSlim? GetRepoLock(string type, int? repositoryId)
+    private async Task<IAsyncDisposable?> TryAcquireRepoLockAsync(AsyncTask task)
     {
-        if (type == AsyncTaskTypes.RepositoryUnlock || repositoryId == null)
+        if (task.RepositoryId == null || task.Type == AsyncTaskTypes.RepositoryUnlock)
             return null;
-        return RepoLocks.GetOrAdd(repositoryId.Value, _ => new SemaphoreSlim(1, 1));
+        if (task.Type == AsyncTaskTypes.BackupRun || task.Type == AsyncTaskTypes.RepositoryCheck)
+            return null;
+        return await _repositoryLockManager.AcquireAsync(task.RepositoryId.Value);
     }
 
     /// <summary>

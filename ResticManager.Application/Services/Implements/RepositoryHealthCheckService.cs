@@ -15,15 +15,18 @@ public class RepositoryHealthCheckService : IRepositoryHealthCheckService
 {
     private readonly ResticManagerDbContext _context;
     private readonly IResticService _resticService;
+    private readonly IRepositoryLockManager _repositoryLockManager;
     private readonly ILogger<RepositoryHealthCheckService> _logger;
 
     public RepositoryHealthCheckService(
         ResticManagerDbContext context,
         IResticService resticService,
+        IRepositoryLockManager repositoryLockManager,
         ILogger<RepositoryHealthCheckService> logger)
     {
         _context = context;
         _resticService = resticService;
+        _repositoryLockManager = repositoryLockManager;
         _logger = logger;
     }
 
@@ -47,6 +50,9 @@ public class RepositoryHealthCheckService : IRepositoryHealthCheckService
         var stopwatch = Stopwatch.StartNew();
         try
         {
+            // 每仓库互斥：restic check 创建排它锁，与定时备份（默认 Cron 同为 03:00）、
+            // AsyncTaskService 后台任务共用仓库锁排队执行，避免双方竞争后端锁必有一败
+            await using var repoLock = await _repositoryLockManager.AcquireAsync(repositoryId);
             var output = await _resticService.CheckRepositoryAsync(repository);
             stopwatch.Stop();
 
