@@ -58,6 +58,16 @@ ResticManager.sln
 
 Windows 下执行根目录的 `publish-build-docker.bat`：清空 `restic-manager-release` → `dotnet publish` → `npm run build` → `docker build` → `docker save` 输出 `restic-manager.tar`。
 
+### NAS（fnOS）上构建与部署
+
+在 NAS 上只能通过容器编译（宿主禁止安装 SDK）：
+
+1. **前置**：`ResticManager.Web/restic/0.18.1/restic.exe` 在 NAS 检出中缺失（被 `.gitignore` 的 `*.exe` 忽略），需 `touch` 一个空占位文件，否则 csproj 的 Content 拷贝报 MSB3030；`ResticManager.Web/wwwroot/`（前端产物）需从运行中容器 `docker cp restic-manager:/app/wwwroot ...` 拷出，`Microsoft.NET.Sdk.Web` 会自动打进发布目录。另外 fnOS 检出中 restic 二进制权限位为 000，`COPY` 会原样保留导致容器内 `Permission denied`——Dockerfile final 阶段已含 `chmod 755` 修正，勿删。
+2. **编译验证**：`docker run --rm -v <仓库>:/src -w /src mcr.microsoft.com/dotnet/sdk:10.0 dotnet build ResticManager.sln -c Debug`（注意 Dockerfile/命令里必须用 `sdk:10.0`/`aspnet:10.0`，`sdk:10` 这个 tag 不存在）。
+3. **构建镜像**：`docker build -t restic-manager:<tag> -f ResticManager.Web/Dockerfile .`（上下文为仓库根目录，`.dockerignore` 已排除 node_modules/bin/obj）。
+4. **运行参数**（与既有部署一致）：`--user 1000:1001`（`/app/data` 挂载卷属主，缺省 `APP_UID=1654` 会启动失败）、`--network docker_network -p 5051:80`、挂载 `/vol2/1000/docker/restic-manager/data:/app/data`、`/vol02/.../restic-backup:/aliyun`、`/vol2/1000/docker:/restic-data/docker`、`/vol4/1000:/restic-data/huangmaoqiu`，env `TZ=Asia/Shanghai`、`RESTIC_CACHE_DIR=/app/data/cache`、`ASPNETCORE_URLS=http://0.0.0.0:80`。
+5. **验证注意**：Claude 的沙箱（terminal-buddy 容器）内 `curl localhost:5051` 永远不通（localhost 是沙箱自己，且到 NAS 宿主端口的路径被隔离）；只能用容器 IP 直连验证（`docker inspect` 取 `NetworkSettings.Networks` 的 IP，curl `http://<容器IP>/`）。
+
 ## 关键架构细节
 
 ### 启动配置（`ResticManager.Web/Program.cs`）

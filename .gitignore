@@ -35,3 +35,4 @@ obj
 /restic-manager-release
 /ResticManager.Web/data
 /docker/data
+ResticManager.Web/wwwroot/
