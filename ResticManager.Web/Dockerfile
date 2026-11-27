@@ -34,6 +34,8 @@ FROM base AS final
 USER root
 WORKDIR /app
 COPY --from=publish /app/publish .
-RUN chmod 755 /app/restic/0.18.1/restic
+RUN chmod 755 /app/restic/0.18.1/restic \
+    && mkdir -p /app/data \
+    && chown -R $APP_UID:$APP_UID /app/data
 USER $APP_UID
 ENTRYPOINT ["dotnet", "ResticManager.Web.dll"]

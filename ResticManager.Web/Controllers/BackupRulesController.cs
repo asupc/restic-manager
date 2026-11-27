@@ -38,7 +38,7 @@ public class BackupRulesController : ControllerBase
     {
         // 获取所有规则
         var rules = await _context.BackupRules.ToListAsync();
-        
+
         return Ok(rules);
     }
 
@@ -60,7 +60,22 @@ public class BackupRulesController : ControllerBase
         if (id != rule.Id)
             return BadRequest();
 
-        _context.Entry(rule).State = EntityState.Modified;
+        var existingRule = await _context.BackupRules.FindAsync(id);
+        if (existingRule == null)
+            return NotFound();
+
+        existingRule.Name = rule.Name;
+        existingRule.IncludePatterns = rule.IncludePatterns;
+        existingRule.ExcludePatterns = rule.ExcludePatterns;
+        existingRule.KeepDaily = rule.KeepDaily;
+        existingRule.KeepDailyCount = rule.KeepDailyCount;
+        existingRule.KeepWeekly = rule.KeepWeekly;
+        existingRule.KeepWeeklyCount = rule.KeepWeeklyCount;
+        existingRule.KeepMonthly = rule.KeepMonthly;
+        existingRule.KeepMonthlyCount = rule.KeepMonthlyCount;
+        existingRule.KeepYearly = rule.KeepYearly;
+        existingRule.KeepYearlyCount = rule.KeepYearlyCount;
+        existingRule.UpdatedAt = DateTime.UtcNow;
 
         await _context.SaveChangesAsync();
 
@@ -74,6 +89,15 @@ public class BackupRulesController : ControllerBase
 
         if (rule == null)
             return NotFound();
+
+        // 先解除关联备份任务的外键引用，避免外键约束报错
+        var referencingTasks = await _context.BackupTasks
+            .Where(t => t.BackupRuleId == id)
+            .ToListAsync();
+        foreach (var task in referencingTasks)
+        {
+            task.BackupRuleId = null;
+        }
 
         _context.BackupRules.Remove(rule);
         await _context.SaveChangesAsync();

@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Quartz;
 using ResticManager.Application.Services.Abstractions;
 using ResticManager.Application.Services.Implements;
 using ResticManager.Models;
@@ -26,13 +28,44 @@ public class BackupTasksController : ControllerBase
         _asyncTaskService = asyncTaskService;
     }
 
+    /// <summary>
+    /// 返回脱敏后的任务副本，清除关联仓库的敏感字段且不污染 EF 跟踪状态
+    /// </summary>
+    private static BackupTask SanitizeTask(BackupTask task) => new()
+    {
+        Id = task.Id,
+        Name = task.Name,
+        Description = task.Description,
+        SourcePath = task.SourcePath,
+        RepositoryId = task.RepositoryId,
+        IsEnabled = task.IsEnabled,
+        CreatedAt = task.CreatedAt,
+        LastRunAt = task.LastRunAt,
+        RepositoryType = task.RepositoryType,
+        LastRunStatus = task.LastRunStatus,
+        CronExpression = task.CronExpression,
+        BackupRuleId = task.BackupRuleId,
+        Rule = task.Rule,
+        Repository = task.Repository == null ? null : new Repository
+        {
+            Id = task.Repository.Id,
+            Name = task.Repository.Name,
+            Path = task.Repository.Path,
+            Password = string.Empty,
+            Type = task.Repository.Type,
+            CredentialsJson = null,
+            CreatedAt = task.Repository.CreatedAt,
+            IsInitialized = task.Repository.IsInitialized,
+            StatsJson = task.Repository.StatsJson,
+            StatsUpdatedAt = task.Repository.StatsUpdatedAt
+        }
+    };
 
     [HttpGet]
     public async Task<IActionResult> GetAll()
     {
         var tasks = await _taskService.GetAllTasksAsync();
-        //var taskDtos = tasks.Select(BackupTaskDto.FromEntity).ToList();
-        return Ok(tasks);
+        return Ok(tasks.Select(SanitizeTask).ToList());
     }
 
     [HttpGet("{id}")]
@@ -43,8 +76,7 @@ public class BackupTasksController : ControllerBase
         if (task == null)
             return NotFound(new { message = "未找到指定的任务" });
 
-        //var taskDto = BackupTaskDto.FromEntity(task);
-        return Ok(task);
+        return Ok(SanitizeTask(task));
     }
 
     [HttpPost]
@@ -52,16 +84,19 @@ public class BackupTasksController : ControllerBase
     {
         if (!ModelState.IsValid)
             return BadRequest(ModelState);
-            
+
+        if (!string.IsNullOrWhiteSpace(task.CronExpression) && !CronExpression.IsValidExpression(task.CronExpression))
+            return BadRequest(new { message = "无效的 Cron 表达式" });
+
         var createdTask = await _taskService.CreateTaskAsync(task);
-        
+
         // 如果任务已启用且有Cron表达式，则安排调度
         if (createdTask.IsEnabled && !string.IsNullOrEmpty(createdTask.CronExpression))
         {
             await _schedulerService.ScheduleTask(createdTask, HttpContext.RequestAborted);
         }
-        
-        return CreatedAtAction(nameof(GetById), new { id = createdTask.Id }, createdTask);
+
+        return CreatedAtAction(nameof(GetById), new { id = createdTask.Id }, SanitizeTask(createdTask));
     }
 
     [HttpPut("{id}")]
@@ -69,7 +104,10 @@ public class BackupTasksController : ControllerBase
     {
         if (id != task.Id)
             return BadRequest();
-            
+
+        if (!string.IsNullOrWhiteSpace(task.CronExpression) && !CronExpression.IsValidExpression(task.CronExpression))
+            return BadRequest(new { message = "无效的 Cron 表达式" });
+
         var existingTask = await _taskService.GetTaskByIdAsync(id);
         if (existingTask == null)
             return NotFound();
@@ -92,7 +130,7 @@ public class BackupTasksController : ControllerBase
 
         // 移除任务调度
         await _schedulerService.RemoveTask(id, HttpContext.RequestAborted);
-        
+
         await _taskService.DeleteTaskAsync(id);
         return NoContent();
     }
@@ -130,6 +168,12 @@ public class BackupTasksController : ControllerBase
         // 如果没有提供路径，则使用根路径
         var directoryPath = string.IsNullOrEmpty(path) ? "/" : path;
 
+        // 安全校验非法路径字符
+        if (directoryPath.IndexOfAny(Path.GetInvalidPathChars()) >= 0 || directoryPath.Contains('\0'))
+        {
+            return BadRequest(new { message = "路径包含非法字符" });
+        }
+
         // 在Windows系统上，如果没有提供路径且是根路径，则列出所有驱动器
         if (string.IsNullOrEmpty(path) && Environment.OSVersion.Platform == PlatformID.Win32NT)
         {
@@ -144,48 +188,53 @@ public class BackupTasksController : ControllerBase
             return Ok(drives);
         }
 
-        // 确保路径存在且为目录
-        if (!Directory.Exists(directoryPath))
+        try
         {
-            return BadRequest(new { message = "指定的路径不存在或不是目录" });
-        }
-
-        // 获取目录内容
-        var folderInfos = new List<FolderInfo>();
-
-        //// 添加父目录（如果不是根目录）
-        //if (Directory.GetParent(directoryPath) != null)
-        //{
-        //    folderInfos.Add(new FolderInfo
-        //    {
-        //        Name = "..",
-        //        Type = "folder"
-        //    });
-        //}
-
-        // 添加子目录
-        var directories = Directory.GetDirectories(directoryPath);
-        foreach (var dir in directories)
-        {
-            folderInfos.Add(new FolderInfo
+            // 确保路径存在且为目录
+            if (!Directory.Exists(directoryPath))
             {
-                Name = Path.GetFileName(dir),
-                Type = "folder"
-            });
-        }
+                return BadRequest(new { message = "指定的路径不存在或不是目录" });
+            }
 
-        // 添加文件
-        var files = Directory.GetFiles(directoryPath);
-        foreach (var file in files)
-        {
-            folderInfos.Add(new FolderInfo
+            // 获取目录内容
+            var folderInfos = new List<FolderInfo>();
+
+            // 添加子目录
+            var directories = Directory.GetDirectories(directoryPath);
+            foreach (var dir in directories)
             {
-                Name = Path.GetFileName(file),
-                Type = "file"
-            });
-        }
+                folderInfos.Add(new FolderInfo
+                {
+                    Name = Path.GetFileName(dir),
+                    Type = "folder"
+                });
+            }
 
-        return Ok(folderInfos);
+            // 添加文件
+            var files = Directory.GetFiles(directoryPath);
+            foreach (var file in files)
+            {
+                folderInfos.Add(new FolderInfo
+                {
+                    Name = Path.GetFileName(file),
+                    Type = "file"
+                });
+            }
+
+            return Ok(folderInfos);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return StatusCode(StatusCodes.Status403Forbidden, new { message = "没有权限访问指定目录" });
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return BadRequest(new { message = "无效的路径格式" });
+        }
+        catch (IOException ex)
+        {
+            return BadRequest(new { message = $"无法读取目录内容：{ex.Message}" });
+        }
     }
 
     /// <summary>
@@ -197,6 +246,12 @@ public class BackupTasksController : ControllerBase
     [HttpPut("{id}/schedule")]
     public async Task<IActionResult> UpdateSchedule(int id, [FromBody] UpdateScheduleRequest request)
     {
+        if (request == null)
+            return BadRequest(new { message = "请求体不能为空" });
+
+        if (!string.IsNullOrWhiteSpace(request.CronExpression) && !CronExpression.IsValidExpression(request.CronExpression))
+            return BadRequest(new { message = "无效的 Cron 表达式" });
+
         var task = await _taskService.GetTaskByIdAsync(id);
         if (task == null)
             return NotFound();

@@ -1,6 +1,10 @@
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using ResticManager.Application.Services.Abstractions;
+using ResticManager.Application.Services.Implements;
+using ResticManager.Data;
 using ResticManager.Models;
 using ResticManager.Models.Dtos;
 
@@ -11,27 +15,60 @@ namespace ResticManager.Web.Controllers;
 [Authorize]
 public class RepositoryController : ControllerBase
 {
+    private static readonly Regex SnapshotIdRegex = new(@"^([a-fA-F0-9]{4,64}|latest)$", RegexOptions.Compiled);
+    private static readonly Regex SubsetRegex = new(@"^(\d{1,3}%|\d+/\d+|\d+[KMGTP]?)$", RegexOptions.Compiled);
+
     private readonly IRepositoryService _repositoryService;
     private readonly IRepositoryHealthCheckService _healthCheckService;
     private readonly ISnapshotService _snapshotService;
     private readonly IAsyncTaskService _asyncTaskService;
+    private readonly ResticManagerDbContext _context;
+    private readonly QuartzSchedulerService _schedulerService;
 
     public RepositoryController(IRepositoryService repositoryService,
         IRepositoryHealthCheckService healthCheckService,
         ISnapshotService snapshotService,
-        IAsyncTaskService asyncTaskService)
+        IAsyncTaskService asyncTaskService,
+        ResticManagerDbContext context,
+        QuartzSchedulerService schedulerService)
     {
         _repositoryService = repositoryService;
         _healthCheckService = healthCheckService;
         _snapshotService = snapshotService;
         _asyncTaskService = asyncTaskService;
+        _context = context;
+        _schedulerService = schedulerService;
     }
+
+    /// <summary>
+    /// 返回脱敏后的仓库副本，避免向前端下发明文密码，同时不污染 EF 跟踪实体
+    /// </summary>
+    private static Repository SanitizeRepository(Repository repository) => new()
+    {
+        Id = repository.Id,
+        Name = repository.Name,
+        Path = repository.Path,
+        Password = string.Empty,
+        Type = repository.Type,
+        CredentialsJson = repository.CredentialsJson,
+        CreatedAt = repository.CreatedAt,
+        IsInitialized = repository.IsInitialized,
+        StatsJson = repository.StatsJson,
+        StatsUpdatedAt = repository.StatsUpdatedAt,
+        Tasks = repository.Tasks
+    };
+
+    private static bool IsValidSnapshotId(string? snapshotId) =>
+        !string.IsNullOrWhiteSpace(snapshotId) && SnapshotIdRegex.IsMatch(snapshotId);
+
+    private static bool IsValidSubset(string? subset) =>
+        !string.IsNullOrWhiteSpace(subset) && SubsetRegex.IsMatch(subset);
 
     [HttpGet]
     public async Task<ActionResult<List<Repository>>> GetRepositories()
     {
         var repositories = await _repositoryService.GetAllRepositoriesAsync();
-        return Ok(repositories);
+        return Ok(repositories.Select(SanitizeRepository).ToList());
     }
 
     [HttpGet("{id}")]
@@ -42,7 +79,7 @@ public class RepositoryController : ControllerBase
         {
             return NotFound(new { message = "未找到指定的仓库" });
         }
-        return Ok(repository);
+        return Ok(SanitizeRepository(repository));
     }
 
     [HttpPost]
@@ -56,7 +93,7 @@ public class RepositoryController : ControllerBase
         try
         {
             var createdRepository = await _repositoryService.CreateRepositoryAsync(repository);
-            return CreatedAtAction(nameof(GetRepository), new { id = createdRepository.Id }, createdRepository);
+            return CreatedAtAction(nameof(GetRepository), new { id = createdRepository.Id }, SanitizeRepository(createdRepository));
         }
         catch (ArgumentException ex)
         {
@@ -75,21 +112,33 @@ public class RepositoryController : ControllerBase
         try
         {
             var updatedRepository = await _repositoryService.UpdateRepositoryAsync(id, repository);
-            return Ok(updatedRepository);
+            if (updatedRepository == null)
+            {
+                return NotFound(new { message = "未找到指定的仓库" });
+            }
+
+            return Ok(SanitizeRepository(updatedRepository));
         }
         catch (ArgumentException ex)
         {
             return BadRequest(new { message = ex.Message });
-        }
-        catch (Exception)
-        {
-            return NotFound(new { message = "未找到指定的仓库" });
         }
     }
 
     [HttpDelete("{id}")]
     public async Task<IActionResult> DeleteRepository(int id)
     {
+        // 删除仓库前先清理该仓库关联备份任务的 Quartz 定时任务，避免孤儿 Job 持续报错
+        var taskIds = await _context.BackupTasks
+            .Where(t => t.RepositoryId == id)
+            .Select(t => t.Id)
+            .ToListAsync();
+
+        foreach (var taskId in taskIds)
+        {
+            await _schedulerService.RemoveTask(taskId, HttpContext.RequestAborted);
+        }
+
         var result = await _repositoryService.DeleteRepositoryAsync(id);
         if (!result)
         {
@@ -243,6 +292,11 @@ public class RepositoryController : ControllerBase
     [HttpGet("{id}/snapshots/{snapshotId}/subdirectory-files-tree")]
     public Task<IActionResult> ListSubdirectoryFilesInSnapshotTree(int id, string snapshotId, [FromQuery] string path = "")
     {
+        if (!IsValidSnapshotId(snapshotId))
+        {
+            return Task.FromResult<IActionResult>(BadRequest(new { message = "无效的快照ID格式" }));
+        }
+
         // 文件树展开会被连续触发，TargetKey 含 path：同目录连点被拒，不同目录互不影响
         return SubmitRepositoryTaskAsync(id, AsyncTaskTypes.SnapshotFileTree,
             name => $"浏览仓库 {name} 快照 {snapshotId} 的文件",
@@ -253,6 +307,11 @@ public class RepositoryController : ControllerBase
     [HttpGet("{id}/snapshots/{snapshotId1}/diff/{snapshotId2}")]
     public Task<IActionResult> DiffSnapshots(int id, string snapshotId1, string snapshotId2)
     {
+        if (!IsValidSnapshotId(snapshotId1) || !IsValidSnapshotId(snapshotId2))
+        {
+            return Task.FromResult<IActionResult>(BadRequest(new { message = "无效的快照ID格式" }));
+        }
+
         return SubmitRepositoryTaskAsync(id, AsyncTaskTypes.SnapshotDiff,
             name => $"比较仓库 {name} 的快照差异",
             new { snapshotId1, snapshotId2 },
@@ -263,6 +322,11 @@ public class RepositoryController : ControllerBase
     [HttpPost("{id}/snapshots/{snapshotId}/restore")]
     public Task<IActionResult> RestoreSnapshot(int id, string snapshotId, [FromBody] RestoreRequest request)
     {
+        if (!IsValidSnapshotId(snapshotId))
+        {
+            return Task.FromResult<IActionResult>(BadRequest(new { message = "无效的快照ID格式" }));
+        }
+
         return SubmitRepositoryTaskAsync(id, AsyncTaskTypes.SnapshotRestore,
             name => $"恢复仓库 {name} 的快照 {snapshotId}",
             new { snapshotId, targetPath = request.TargetPath, verify = request.Verify },
@@ -273,6 +337,11 @@ public class RepositoryController : ControllerBase
     [HttpPost("{id}/files/restore")]
     public Task<IActionResult> RestoreFile(int id, [FromBody] RestoreFileRequest request)
     {
+        if (request == null || !IsValidSnapshotId(request.SnapshotId))
+        {
+            return Task.FromResult<IActionResult>(BadRequest(new { message = "无效的快照ID格式" }));
+        }
+
         return SubmitRepositoryTaskAsync(id, AsyncTaskTypes.FileRestore,
             name => $"恢复仓库 {name} 快照 {request.SnapshotId} 中的文件",
             new { snapshotId = request.SnapshotId, filePath = request.FilePath, targetPath = request.TargetPath, verify = request.Verify },
@@ -283,6 +352,11 @@ public class RepositoryController : ControllerBase
     [HttpDelete("{id}/snapshots/{snapshotId}")]
     public Task<IActionResult> Delete(int id, string snapshotId)
     {
+        if (!IsValidSnapshotId(snapshotId))
+        {
+            return Task.FromResult<IActionResult>(BadRequest(new { message = "无效的快照ID格式" }));
+        }
+
         return SubmitRepositoryTaskAsync(id, AsyncTaskTypes.SnapshotDelete,
             name => $"删除仓库 {name} 的快照 {snapshotId}",
             new { snapshotId },
@@ -303,6 +377,11 @@ public class RepositoryController : ControllerBase
         if (snapshotIds.Count == 0)
         {
             return Task.FromResult<IActionResult>(BadRequest(new { message = "请选择要删除的快照" }));
+        }
+
+        if (snapshotIds.Any(x => !IsValidSnapshotId(x)))
+        {
+            return Task.FromResult<IActionResult>(BadRequest(new { message = "包含无效的快照ID格式" }));
         }
 
         // TargetKey 列限 100 字符：ID 多时截断（防重入只在进程内比对，截断不影响正确性）
@@ -367,6 +446,11 @@ public class RepositoryController : ControllerBase
     [HttpPost("{id}/deep-check")]
     public Task<IActionResult> DeepCheck(int id, [FromQuery] string subset = "5%")
     {
+        if (!IsValidSubset(subset))
+        {
+            return Task.FromResult<IActionResult>(BadRequest(new { message = "无效的校验比例格式" }));
+        }
+
         return SubmitRepositoryTaskAsync(id, AsyncTaskTypes.RepositoryDeepCheck,
             name => $"深度校验仓库 {name}",
             new { subset },
@@ -396,6 +480,11 @@ public class RepositoryController : ControllerBase
     [HttpGet("{id}/snapshots/{snapshotId}/download")]
     public async Task<IActionResult> DownloadFile(int id, string snapshotId, [FromQuery] string path)
     {
+        if (!IsValidSnapshotId(snapshotId))
+        {
+            return BadRequest(new { message = "无效的快照ID格式" });
+        }
+
         if (string.IsNullOrWhiteSpace(path))
         {
             return BadRequest(new { message = "文件路径不能为空" });
@@ -431,6 +520,11 @@ public class RepositoryController : ControllerBase
     [HttpPut("{id}/snapshots/{snapshotId}/tags")]
     public Task<IActionResult> SetSnapshotTags(int id, string snapshotId, [FromBody] SetTagsRequest request)
     {
+        if (!IsValidSnapshotId(snapshotId))
+        {
+            return Task.FromResult<IActionResult>(BadRequest(new { message = "无效的快照ID格式" }));
+        }
+
         return SubmitRepositoryTaskAsync(id, AsyncTaskTypes.SnapshotTagSet,
             name => $"更新仓库 {name} 快照 {snapshotId} 的标签",
             new { snapshotId, tags = request?.Tags ?? new List<string>() },

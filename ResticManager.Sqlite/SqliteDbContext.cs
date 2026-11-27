@@ -26,6 +26,9 @@ public class SqliteDbContext : ResticManagerDbContext
             entity.HasIndex(e => e.Username).IsUnique();
             entity.Property(e => e.Username).IsRequired().HasMaxLength(50);
             entity.Property(e => e.PasswordHash).IsRequired();
+            entity.Property(e => e.CreatedAt).HasConversion(
+                v => v.ToUniversalTime(),
+                v => DateTime.SpecifyKind(v, DateTimeKind.Utc));
         });
 
         // 配置Repository实体
@@ -40,6 +43,12 @@ public class SqliteDbContext : ResticManagerDbContext
             entity.Property(e => e.CredentialsJson);
             // 统计结果 JSON 不限长
             entity.Property(e => e.StatsJson);
+            entity.Property(e => e.CreatedAt).HasConversion(
+                v => v.ToUniversalTime(),
+                v => DateTime.SpecifyKind(v, DateTimeKind.Utc));
+            entity.Property(e => e.StatsUpdatedAt).HasConversion(
+                v => v.HasValue ? v.Value.ToUniversalTime() : v,
+                v => v.HasValue ? DateTime.SpecifyKind(v.Value, DateTimeKind.Utc) : v);
         });
 
         // 配置BackupRule实体
@@ -49,6 +58,12 @@ public class SqliteDbContext : ResticManagerDbContext
             entity.Property(e => e.Name).IsRequired().HasMaxLength(100);
             entity.Property(e => e.IncludePatterns).HasMaxLength(2000);
             entity.Property(e => e.ExcludePatterns).HasMaxLength(2000);
+            entity.Property(e => e.CreatedAt).HasConversion(
+                v => v.ToUniversalTime(),
+                v => DateTime.SpecifyKind(v, DateTimeKind.Utc));
+            entity.Property(e => e.UpdatedAt).HasConversion(
+                v => v.ToUniversalTime(),
+                v => DateTime.SpecifyKind(v, DateTimeKind.Utc));
         });
 
         // 配置BackupTask实体
@@ -60,6 +75,12 @@ public class SqliteDbContext : ResticManagerDbContext
             entity.Property(e => e.RepositoryType).IsRequired().HasMaxLength(20);
             entity.Property(e => e.LastRunStatus).IsRequired().HasMaxLength(20);
             entity.Property(e => e.CronExpression).HasMaxLength(50);
+            entity.Property(e => e.CreatedAt).HasConversion(
+                v => v.ToUniversalTime(),
+                v => DateTime.SpecifyKind(v, DateTimeKind.Utc));
+            entity.Property(e => e.LastRunAt).HasConversion(
+                v => v.HasValue ? v.Value.ToUniversalTime() : v,
+                v => v.HasValue ? DateTime.SpecifyKind(v.Value, DateTimeKind.Utc) : v);
         });
 
         // 配置BackupRecord实体
@@ -68,6 +89,12 @@ public class SqliteDbContext : ResticManagerDbContext
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Status).IsRequired().HasMaxLength(20);
             entity.Property(e => e.Error).HasMaxLength(2000);
+            entity.Property(e => e.StartTime).HasConversion(
+                v => v.ToUniversalTime(),
+                v => DateTime.SpecifyKind(v, DateTimeKind.Utc));
+            entity.Property(e => e.EndTime).HasConversion(
+                v => v.HasValue ? v.Value.ToUniversalTime() : v,
+                v => v.HasValue ? DateTime.SpecifyKind(v.Value, DateTimeKind.Utc) : v);
         });
 
         // 配置BackupSnapshot实体：远端快照元数据的本地缓存
@@ -112,6 +139,9 @@ public class SqliteDbContext : ResticManagerDbContext
             entity.Property(e => e.Status).IsRequired().HasMaxLength(20);
             entity.Property(e => e.Trigger).IsRequired().HasMaxLength(20);
             entity.Property(e => e.ErrorMessage).HasMaxLength(4000);
+            entity.Property(e => e.CheckedAt).HasConversion(
+                v => v.ToUniversalTime(),
+                v => DateTime.SpecifyKind(v, DateTimeKind.Utc));
             entity.HasIndex(e => new { e.RepositoryId, e.CheckedAt });
         });
 

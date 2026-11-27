@@ -32,7 +32,7 @@ namespace ResticManager.Web.Controllers
                 .Include(r => r.Task)
                 .OrderByDescending(r => r.StartTime)
                 .ToListAsync();
-            
+
             return Ok(records);
         }
 
@@ -47,6 +47,9 @@ namespace ResticManager.Web.Controllers
             [FromQuery] string? status = null,
             [FromQuery] string? keyword = null)
         {
+            page = Math.Max(1, page);
+            pageSize = Math.Clamp(pageSize, 1, 100);
+
             var pagedResult = await _recordService.GetPagedRecordsAsync(page, pageSize, taskId, status, keyword);
             return Ok(pagedResult);
         }
@@ -74,6 +77,9 @@ namespace ResticManager.Web.Controllers
             [FromQuery] int page = 1,
             [FromQuery] int pageSize = 10)
         {
+            page = Math.Max(1, page);
+            pageSize = Math.Clamp(pageSize, 1, 100);
+
             var pagedResult = await _recordService.GetPagedRecordsByTaskIdAsync(taskId, page, pageSize);
             return Ok(pagedResult);
         }

@@ -1,3 +1,4 @@
+using System.ComponentModel.DataAnnotations;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using ResticManager.Application.Services.Abstractions;
@@ -53,7 +54,7 @@ public class AuthController : ControllerBase
 
         return Ok(new { token });
     }
-    
+
     [HttpGet("has-user")]
     [AllowAnonymous]
     public async Task<IActionResult> HasAnyUser()
@@ -65,13 +66,24 @@ public class AuthController : ControllerBase
 
 public class RegisterRequest
 {
+    [Required(ErrorMessage = "用户名不能为空")]
+    [MinLength(3, ErrorMessage = "用户名长度不能少于3个字符")]
     public string Username { get; set; } = string.Empty;
+
+    [Required(ErrorMessage = "密码不能为空")]
+    [MinLength(6, ErrorMessage = "密码长度不能少于6个字符")]
     public string Password { get; set; } = string.Empty;
+
     public string Email { get; set; } = string.Empty;
 }
 
 public class LoginRequest
 {
+    [Required(ErrorMessage = "用户名不能为空")]
+    [MinLength(1, ErrorMessage = "用户名不能为空")]
     public string Username { get; set; } = string.Empty;
+
+    [Required(ErrorMessage = "密码不能为空")]
+    [MinLength(1, ErrorMessage = "密码不能为空")]
     public string Password { get; set; } = string.Empty;
 }

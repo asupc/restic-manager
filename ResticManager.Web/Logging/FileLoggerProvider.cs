@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Text.Encodings.Web;
@@ -31,6 +32,7 @@ public sealed class FileLoggerProvider : ILoggerProvider
     private readonly object _lock = new();
     private StreamWriter? _writer;
     private string _currentDate = string.Empty;
+    private bool _disposed;
 
     // 写入连续失败后停写，冷却期后重试一次（避免每条日志都触发异常开销）
     private bool _disabled;
@@ -47,6 +49,12 @@ public sealed class FileLoggerProvider : ILoggerProvider
     {
         lock (_lock)
         {
+            if (_disposed)
+            {
+                return;
+            }
+            _disposed = true;
+
             try
             {
                 _writer?.Flush();
@@ -69,10 +77,15 @@ public sealed class FileLoggerProvider : ILoggerProvider
         {
             lock (_lock)
             {
+                if (_disposed)
+                {
+                    return;
+                }
+
                 if (_disabled)
                 {
                     // 冷却期（1 分钟）过后重试一次
-                    if ((DateTime.Now - _disabledAt).TotalMinutes < 1)
+                    if ((DateTime.UtcNow - _disabledAt).TotalMinutes < 1)
                     {
                         return;
                     }
@@ -97,7 +110,7 @@ public sealed class FileLoggerProvider : ILoggerProvider
                 {
                     // 写入失败：停写并清理句柄，冷却期后重试
                     _disabled = true;
-                    _disabledAt = DateTime.Now;
+                    _disabledAt = DateTime.UtcNow;
                     try
                     {
                         _writer?.Dispose();
@@ -146,19 +159,26 @@ public sealed class FileLoggerProvider : ILoggerProvider
     {
         try
         {
-            if (!DateTime.TryParseExact(today, "yyyyMMdd", null, System.Globalization.DateTimeStyles.None, out var todayDate))
+            if (!DateTime.TryParseExact(today, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var todayDate))
             {
                 return;
             }
-            var expireBefore = todayDate.AddDays(-_options.RetainDays).ToString("yyyyMMdd");
+            var expireBeforeDate = todayDate.AddDays(-_options.RetainDays);
+            const string prefix = "restic-manager-";
 
             foreach (var file in System.IO.Directory.EnumerateFiles(_options.Directory, "restic-manager-*.log"))
             {
                 try
                 {
                     var name = Path.GetFileNameWithoutExtension(file);
-                    var datePart = name.Substring(name.Length - 8);
-                    if (datePart.CompareTo(expireBefore) < 0)
+                    if (!name.StartsWith(prefix, StringComparison.Ordinal) || name.Length != prefix.Length + 8)
+                    {
+                        continue;
+                    }
+
+                    var datePart = name.Substring(prefix.Length, 8);
+                    if (DateTime.TryParseExact(datePart, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var fileDate) &&
+                        fileDate < expireBeforeDate)
                     {
                         File.Delete(file);
                     }

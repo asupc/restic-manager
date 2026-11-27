@@ -38,6 +38,9 @@ public class SystemLogsController : ControllerBase
         [FromQuery] string? startDate = null,
         [FromQuery] string? endDate = null)
     {
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 200);
+
         var result = _logReader.GetPaged(page, pageSize, level, keyword, startDate, endDate);
         return Ok(result);
     }

@@ -56,7 +56,12 @@ public class SystemLogReader
             .Select(f => f.path)
             .ToList();
 
-        var entries = new List<(DateTimeOffset sortKey, SystemLogEntryDto entry)>();
+        // 仅在内存中保留当前页所需的最新 Top-K 条（最小堆），避免全量加载历史日志导致高内存占用
+        var targetCount = (long)page * pageSize;
+        var maxKeep = targetCount > int.MaxValue ? int.MaxValue : (int)targetCount;
+        var topEntries = new PriorityQueue<(DateTimeOffset sortKey, long seq, SystemLogEntryDto entry), (DateTimeOffset sortKey, long seq)>();
+        var total = 0;
+        long seq = 0;
 
         foreach (var file in files)
         {
@@ -78,49 +83,90 @@ public class SystemLogReader
                         using var doc = JsonDocument.Parse(line);
                         var root = doc.RootElement;
 
-                        if (!root.TryGetProperty("ts", out var tsEl) ||
-                            !root.TryGetProperty("level", out var levelEl) ||
-                            !root.TryGetProperty("category", out var categoryEl) ||
-                            !root.TryGetProperty("message", out var messageEl))
+                        if (root.ValueKind != JsonValueKind.Object ||
+                            !root.TryGetProperty("ts", out var tsEl) || tsEl.ValueKind != JsonValueKind.String ||
+                            !root.TryGetProperty("level", out var levelEl) || levelEl.ValueKind != JsonValueKind.String ||
+                            !root.TryGetProperty("category", out var categoryEl) || categoryEl.ValueKind != JsonValueKind.String ||
+                            !root.TryGetProperty("message", out var messageEl) || messageEl.ValueKind != JsonValueKind.String)
                         {
                             continue;
                         }
 
-                        var entry = new SystemLogEntryDto
+                        string? exceptionText = null;
+                        if (root.TryGetProperty("exception", out var exEl))
                         {
-                            Timestamp = tsEl.GetString() ?? string.Empty,
-                            Level = levelEl.GetString() ?? string.Empty,
-                            Category = categoryEl.GetString() ?? string.Empty,
-                            Message = messageEl.GetString() ?? string.Empty,
-                            Exception = root.TryGetProperty("exception", out var exEl) ? exEl.GetString() : null
-                        };
+                            if (exEl.ValueKind == JsonValueKind.String)
+                            {
+                                exceptionText = exEl.GetString();
+                            }
+                            else if (exEl.ValueKind != JsonValueKind.Null)
+                            {
+                                exceptionText = exEl.GetRawText();
+                            }
+                        }
+
+                        var timestamp = tsEl.GetString() ?? string.Empty;
+                        var levelText = levelEl.GetString() ?? string.Empty;
+                        var category = categoryEl.GetString() ?? string.Empty;
+                        var message = messageEl.GetString() ?? string.Empty;
 
                         // 级别过滤：该级别及以上
                         if (minLevel.HasValue &&
-                            (!Enum.TryParse<LogLevel>(entry.Level, true, out var entryLevel) || entryLevel < minLevel.Value))
+                            (!Enum.TryParse<LogLevel>(levelText, true, out var entryLevel) || entryLevel < minLevel.Value))
                         {
                             continue;
                         }
 
                         // 关键词过滤（消息/类别/异常，忽略大小写）
                         if (!string.IsNullOrEmpty(keyword) &&
-                            entry.Message.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) < 0 &&
-                            entry.Category.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) < 0 &&
-                            (entry.Exception?.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) ?? -1) < 0)
+                            message.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) < 0 &&
+                            category.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) < 0 &&
+                            (exceptionText?.IndexOf(keyword, StringComparison.OrdinalIgnoreCase) ?? -1) < 0)
                         {
                             continue;
                         }
 
-                        if (!DateTimeOffset.TryParse(entry.Timestamp, CultureInfo.InvariantCulture, DateTimeStyles.None, out var sortKey))
+                        if (!DateTimeOffset.TryParse(timestamp, CultureInfo.InvariantCulture, DateTimeStyles.None, out var sortKey))
                         {
                             continue;
                         }
 
-                        entries.Add((sortKey, entry));
+                        total++;
+                        var currentSeq = ++seq;
+                        var priority = (sortKey, currentSeq);
+
+                        if (topEntries.Count < maxKeep)
+                        {
+                            var entry = new SystemLogEntryDto
+                            {
+                                Timestamp = timestamp,
+                                Level = levelText,
+                                Category = category,
+                                Message = message,
+                                Exception = exceptionText
+                            };
+                            topEntries.Enqueue((sortKey, currentSeq, entry), priority);
+                        }
+                        else if (topEntries.Count > 0)
+                        {
+                            var oldest = topEntries.Peek();
+                            if (priority.CompareTo((oldest.sortKey, oldest.seq)) > 0)
+                            {
+                                var entry = new SystemLogEntryDto
+                                {
+                                    Timestamp = timestamp,
+                                    Level = levelText,
+                                    Category = category,
+                                    Message = message,
+                                    Exception = exceptionText
+                                };
+                                topEntries.DequeueEnqueue((sortKey, currentSeq, entry), priority);
+                            }
+                        }
                     }
-                    catch (JsonException)
+                    catch (Exception ex) when (ex is JsonException or InvalidOperationException)
                     {
-                        // 写入方写了一半的行，跳过（预期情况）
+                        // 写入方写了一半的行或字段类型异常，跳过单行不影响整文件读取
                     }
                 }
             }
@@ -130,10 +176,28 @@ public class SystemLogReader
             }
         }
 
+        result.Total = total;
+        var skip = (long)(page - 1) * pageSize;
+        if (skip >= total || topEntries.Count == 0)
+        {
+            result.Items = new List<SystemLogEntryDto>();
+            return result;
+        }
+
         // 时间倒序（新 → 旧）
-        var ordered = entries.OrderByDescending(e => e.sortKey).Select(e => e.entry).ToList();
-        result.Total = ordered.Count;
-        result.Items = ordered.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+        var kept = new List<(DateTimeOffset sortKey, long seq, SystemLogEntryDto entry)>(topEntries.Count);
+        while (topEntries.Count > 0)
+        {
+            kept.Add(topEntries.Dequeue());
+        }
+
+        result.Items = kept
+            .OrderByDescending(e => e.sortKey)
+            .ThenByDescending(e => e.seq)
+            .Skip((int)skip)
+            .Take(pageSize)
+            .Select(e => e.entry)
+            .ToList();
         return result;
     }
 
@@ -143,8 +207,14 @@ public class SystemLogReader
     private static (string path, DateTime? date) ExtractFileDate(string path)
     {
         var name = Path.GetFileNameWithoutExtension(path);
-        var datePart = name.Length >= 8 ? name.Substring(name.Length - 8) : string.Empty;
-        return DateTime.TryParseExact(datePart, "yyyyMMdd", null, DateTimeStyles.None, out var date)
+        const string prefix = "restic-manager-";
+        if (!name.StartsWith(prefix, StringComparison.Ordinal) || name.Length != prefix.Length + 8)
+        {
+            return (path, null);
+        }
+
+        var datePart = name.Substring(prefix.Length, 8);
+        return DateTime.TryParseExact(datePart, "yyyyMMdd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date)
             ? (path, date)
             : (path, null);
     }
@@ -155,6 +225,6 @@ public class SystemLogReader
         {
             return null;
         }
-        return DateTime.TryParseExact(value, "yyyy-MM-dd", null, DateTimeStyles.None, out var date) ? date : null;
+        return DateTime.TryParseExact(value, "yyyy-MM-dd", CultureInfo.InvariantCulture, DateTimeStyles.None, out var date) ? date : null;
     }
 }

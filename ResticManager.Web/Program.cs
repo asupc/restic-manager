@@ -15,6 +15,7 @@ using ResticManager.Web.Logging;
 using ResticManager.Web.Middleware;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
 
 // 检查并生成 appsettings.json 文件
@@ -43,7 +44,7 @@ builder.Services.AddDbContext<ResticManagerDbContext>(options =>
             options.UseNpgsql(builder.Configuration.GetConnectionString("PostgreSqlConnection"));
             break;
         default:
-            options.UseSqlite(string.IsNullOrEmpty(connectionString) ? "ResticManager.db" : connectionString);
+            options.UseSqlite(string.IsNullOrEmpty(connectionString) ? "Data Source=./data/restic-manager.db" : connectionString);
             break;
     }
 });
@@ -92,9 +93,9 @@ builder.Services.AddSingleton<IRepositoryLockManager, RepositoryLockManager>();
 builder.Services.AddSingleton<IAsyncTaskService, AsyncTaskService>();
 builder.Services.AddHostedService(sp => (AsyncTaskService)sp.GetRequiredService<IAsyncTaskService>());
 
-// 添加 Quartz 调度服务
-builder.Services.AddHostedService<QuartzSchedulerService>();
+// 添加 Quartz 调度服务（Singleton + HostedService 共享同一实例）
 builder.Services.AddSingleton<QuartzSchedulerService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<QuartzSchedulerService>());
 
 // 添加对 Quartz Job 的依赖注入支持
 builder.Services.AddTransient<BackupTaskJob>();
@@ -112,7 +113,6 @@ builder.Services.AddControllers()
         // 添加自定义的时间转换器
         options.JsonSerializerOptions.Converters.Add(new UtcToLocalDateTimeConverter());
         options.JsonSerializerOptions.Converters.Add(new UtcToLocalNullableDateTimeConverter());
-        options.JsonSerializerOptions.Encoder = System.Text.Encodings.Web.JavaScriptEncoder.Create(System.Text.Unicode.UnicodeRanges.All);
     });
 
 // JWT Authentication
@@ -124,7 +124,7 @@ builder.Services.AddAuthentication(JwtBearerDefaults.AuthenticationScheme)
         options.TokenValidationParameters = new TokenValidationParameters
         {
             ValidateIssuerSigningKey = true,
-            IssuerSigningKey = new SymmetricSecurityKey(Encoding.ASCII.GetBytes(builder.Configuration["Jwt:Secret"]!)),
+            IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(builder.Configuration["Jwt:Secret"]!)),
             ValidateIssuer = false,
             ValidateAudience = false
         };
@@ -182,40 +182,7 @@ builder.Services.AddSingleton<SystemLogReader>();
 
 var app = builder.Build();
 
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI();
-}
-
-app.UseHttpsRedirection();
-
-app.UseCors("AllowVueApp");
-
-// 添加全局异常处理中间件
-app.UseGlobalExceptionMiddleware();
-
-app.UseAuthentication();
-app.UseAuthorization();
-
-// 添加对 SPA 的支持，解决刷新页面 404 的问题
-app.Use(async (context, next) =>
-{
-    var path = context.Request.Path;
-    if (!path.HasValue || path.Value.StartsWith("/api") || Path.HasExtension(path.Value))
-    {
-        await next();
-        return;
-    }
-
-    // 保存原始路径，以便客户端路由可以处理它
-    context.Request.Path = "/index.html";
-    await next();
-});
-
-app.MapControllers();
-
-// 确保数据库已创建 
+// 确保数据库已创建
 using (var scope = app.Services.CreateScope())
 {
     var services = scope.ServiceProvider;
@@ -223,8 +190,26 @@ using (var scope = app.Services.CreateScope())
     context.Database.Migrate();
 }
 
-app.UseStaticFiles();
+// 添加全局异常处理中间件
+app.UseGlobalExceptionMiddleware();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI();
+}
+
 app.UseDefaultFiles();
+app.UseStaticFiles();
+
+app.UseRouting();
+
+app.UseCors("AllowVueApp");
+
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapControllers();
 app.MapFallbackToFile("/index.html");
 
 app.Run();
@@ -252,10 +237,18 @@ static void EnsureAppSettingsFile()
     try
     {
         var jsonContent = File.ReadAllText(appSettingsPath);
-        var config = System.Text.Json.JsonDocument.Parse(jsonContent);
+        using var config = System.Text.Json.JsonDocument.Parse(jsonContent);
 
         // 检查 Jwt:Secret 是否存在且符合要求
-        var jwtSecret = config.RootElement.GetProperty("Jwt").GetProperty("Secret").GetString();
+        string? jwtSecret = null;
+        if (config.RootElement.TryGetProperty("Jwt", out var jwtElement) &&
+            jwtElement.ValueKind == System.Text.Json.JsonValueKind.Object &&
+            jwtElement.TryGetProperty("Secret", out var secretElement) &&
+            secretElement.ValueKind == System.Text.Json.JsonValueKind.String)
+        {
+            jwtSecret = secretElement.GetString();
+        }
+
         if (string.IsNullOrEmpty(jwtSecret) || jwtSecret.Length < 32)
         {
             // 重新生成 Jwt:Secret
@@ -265,7 +258,17 @@ static void EnsureAppSettingsFile()
     }
     catch (Exception)
     {
-        // 如果读取或解析失败，则创建默认配置文件
+        // 如果读取或解析失败，先将原文件备份为 .bak 再重建，防止静默丢失用户配置
+        var backupPath = appSettingsPath + ".bak";
+        try
+        {
+            File.Copy(appSettingsPath, backupPath, overwrite: true);
+        }
+        catch (Exception)
+        {
+            // 备份失败不影响重建默认配置
+        }
+
         CreateDefaultAppSettings(appSettingsPath);
     }
 }
@@ -328,38 +331,18 @@ static void CreateDefaultAppSettings(string appSettingsPath)
     File.WriteAllText(appSettingsPath, json);
 }
 
-// 更新 Jwt:Secret
+// 更新 Jwt:Secret（仅修改 Jwt.Secret，保留其余嵌套结构）
 static string UpdateJwtSecret(string jsonContent)
 {
-    var config = System.Text.Json.JsonDocument.Parse(jsonContent);
-    var jsonObject = System.Text.Json.JsonSerializer.Deserialize<System.Text.Json.JsonElement>(jsonContent);
+    var root = JsonNode.Parse(jsonContent)?.AsObject() ?? new JsonObject();
 
-    // 创建更新后的配置对象
-    var updatedConfig = new Dictionary<string, object>();
-
-    foreach (var property in jsonObject.EnumerateObject())
+    if (root["Jwt"] is not JsonObject jwtObj)
     {
-        if (property.Name == "Jwt")
-        {
-            var jwtObject = new Dictionary<string, object>();
-            foreach (var jwtProperty in property.Value.EnumerateObject())
-            {
-                if (jwtProperty.Name == "Secret")
-                {
-                    jwtObject["Secret"] = RandomHelper.GenerateSecureRandomString(32);
-                }
-                else
-                {
-                    jwtObject[jwtProperty.Name] = jwtProperty.Value.ToString();
-                }
-            }
-            updatedConfig["Jwt"] = jwtObject;
-        }
-        else
-        {
-            updatedConfig[property.Name] = property.Value.ToString();
-        }
+        jwtObj = new JsonObject();
+        root["Jwt"] = jwtObj;
     }
 
-    return System.Text.Json.JsonSerializer.Serialize(updatedConfig, new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
+    jwtObj["Secret"] = RandomHelper.GenerateSecureRandomString(32);
+
+    return root.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true });
 }
