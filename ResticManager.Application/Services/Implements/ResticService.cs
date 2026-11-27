@@ -8,11 +8,22 @@ using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 
 namespace ResticManager.Application.Services.Implements;
 
 public class ResticService : IResticService
 {
+    private static readonly Regex SnapshotIdRegex = new(@"^[a-fA-F0-9]{4,64}$", RegexOptions.Compiled);
+    private static readonly Regex ReadDataSubsetRegex = new(@"^(\d{1,3}%|\d+/\d+|\d+[KMGTP]?)$", RegexOptions.Compiled);
+    private static readonly Regex ExcludeLargerThanRegex = new(@"^\d+[kKmMgGtTpP]?$", RegexOptions.Compiled);
+    private static readonly Regex PlainDiffChangeRegex = new(@"^([+\-MUT?]{1,2})\s+(.+)$", RegexOptions.Compiled);
+    private static readonly Regex PlainDiffFilesRegex = new(@"^Files:\s+(\d+)\s+new,\s+(\d+)\s+removed,\s+(\d+)\s+changed", RegexOptions.Compiled);
+    private static readonly Regex PlainDiffDirsRegex = new(@"^Dirs:\s+(\d+)\s+new,\s+(\d+)\s+removed", RegexOptions.Compiled);
+    private static readonly Regex PlainDiffOthersRegex = new(@"^Others:\s+(\d+)\s+new,\s+(\d+)\s+removed", RegexOptions.Compiled);
+    private static readonly Regex PlainDiffDataBlobsRegex = new(@"^Data Blobs:\s+(\d+)\s+new,\s+(\d+)\s+removed", RegexOptions.Compiled);
+    private static readonly Regex PlainDiffTreeBlobsRegex = new(@"^Tree Blobs:\s+(\d+)\s+new,\s+(\d+)\s+removed", RegexOptions.Compiled);
+
     private readonly string _resticPath;
     private readonly ILogger<ResticService> _logger;
 
@@ -23,12 +34,23 @@ public class ResticService : IResticService
         _logger = logger;
     }
 
+    private static void ValidateSnapshotId(string snapshotId, string paramName)
+    {
+        if (string.IsNullOrWhiteSpace(snapshotId) ||
+            (snapshotId != "latest" && !SnapshotIdRegex.IsMatch(snapshotId)))
+        {
+            throw new ArgumentException($"非法的快照 ID: {snapshotId}", paramName);
+        }
+    }
 
     public async Task InitializeRepositoryAsync(Repository repository)
     {
-        var arguments = $"init --repo \"{repository.Path}\"";
-        // 使用参数数组方式传递密码（需要两次输入：设置密码和确认密码）
-        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, arguments, repository.Password, repository.Password);
+        var args = new List<string> { "init", "--repo", repository.Path };
+        // 使用标准输入流式传递密码（需要两次输入：设置密码和确认密码）
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(
+            repository,
+            args,
+            new[] { repository.Password, repository.Password });
 
         if (exitCode != 0)
         {
@@ -41,23 +63,23 @@ public class ResticService : IResticService
 
     public async Task<BackupResult> CreateBackupAsync(string sourcePath, Repository repository, string includePatterns = null, string excludePatterns = null, BackupOptions options = null)
     {
-        var args = $"backup \"{sourcePath}\" --repo \"{repository.Path}\" --json";
+        var args = new List<string> { "backup", sourcePath, "--repo", repository.Path, "--json" };
 
         if (!string.IsNullOrEmpty(includePatterns))
         {
-            var patterns = includePatterns.Split(';');
-            foreach (var pattern in patterns)
+            foreach (var pattern in includePatterns.Split(';').Select(p => p.Trim()).Where(p => !string.IsNullOrEmpty(p)))
             {
-                args += $" --include \"{pattern.Trim()}\"";
+                args.Add("--include");
+                args.Add(pattern);
             }
         }
 
         if (!string.IsNullOrEmpty(excludePatterns))
         {
-            var patterns = excludePatterns.Split(';');
-            foreach (var pattern in patterns)
+            foreach (var pattern in excludePatterns.Split(';').Select(p => p.Trim()).Where(p => !string.IsNullOrEmpty(p)))
             {
-                args += $" --exclude \"{pattern.Trim()}\"";
+                args.Add("--exclude");
+                args.Add(pattern);
             }
         }
 
@@ -67,28 +89,37 @@ public class ResticService : IResticService
             {
                 foreach (var tag in options.Tags.Where(t => !string.IsNullOrWhiteSpace(t)))
                 {
-                    args += $" --tag \"{tag.Trim()}\"";
+                    args.Add("--tag");
+                    args.Add(tag.Trim());
                 }
             }
             if (options.ExcludeCaches)
             {
-                args += " --exclude-caches";
+                args.Add("--exclude-caches");
             }
             if (!string.IsNullOrWhiteSpace(options.ExcludeLargerThan))
             {
-                args += $" --exclude-larger-than {options.ExcludeLargerThan.Trim()}";
+                var trimmed = options.ExcludeLargerThan.Trim();
+                if (!ExcludeLargerThanRegex.IsMatch(trimmed))
+                    throw new ArgumentException($"非法的排除文件大小参数: {options.ExcludeLargerThan}", nameof(options));
+
+                args.Add("--exclude-larger-than");
+                args.Add(trimmed);
             }
             if (options.OneFileSystem)
             {
-                args += " --one-file-system";
+                args.Add("--one-file-system");
             }
             if (options.DryRun)
             {
-                args += " --dry-run";
+                args.Add("--dry-run");
             }
         }
 
-        var (outputLines, errorLines, exitCode) = await ExecuteResticCommandWithLineOutputAsync(repository, args, repository.Password);
+        var (outputLines, errorLines, exitCode) = await ExecuteResticCommandWithLineOutputAsync(
+            repository,
+            args,
+            new[] { repository.Password });
 
         if (exitCode != 0)
         {
@@ -132,8 +163,8 @@ public class ResticService : IResticService
 
     public async Task<List<SnapshotInfo>> ListSnapshotsAsync(Repository repository)
     {
-        var arguments = $"snapshots --repo \"{repository.Path}\" --json";
-        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, arguments, repository.Password);
+        var args = new List<string> { "snapshots", "--repo", repository.Path, "--json" };
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, args, new[] { repository.Password });
 
         if (exitCode != 0)
         {
@@ -164,19 +195,16 @@ public class ResticService : IResticService
         if (idList.Count == 0)
             return new List<SnapshotInfo>();
 
-        // 快照 ID 只能是 4~64 位十六进制（完整 ID 64 位，前缀最短 4 位），
-        // 拒绝其余字符，防止通过路由传入的 snapshotId 拼进命令行注入 restic 参数
         foreach (var id in idList)
         {
-            if (!System.Text.RegularExpressions.Regex.IsMatch(id, "^[a-fA-F0-9]{4,64}$"))
-                throw new ArgumentException($"非法的快照 ID: {id}", nameof(ids));
+            ValidateSnapshotId(id, nameof(ids));
         }
 
-        // restic 0.18.1: `snapshots <id1> <id2> ... --json` 支持按 ID 过滤
-        var idArgs = string.Join(" ", idList.Select(id => $"\"{id}\""));
-        var arguments = $"snapshots --repo \"{repository.Path}\" --json {idArgs}";
+        // restic 0.18.1: `snapshots --repo <path> --json <id1> <id2> ...` 支持按 ID 过滤
+        var args = new List<string> { "snapshots", "--repo", repository.Path, "--json" };
+        args.AddRange(idList);
 
-        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, arguments, repository.Password);
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, args, new[] { repository.Password });
 
         if (exitCode != 0)
         {
@@ -197,14 +225,13 @@ public class ResticService : IResticService
         }
     }
 
-
     public async Task<List<ResticFileInfo>> ListFilesInSnapshotAsync(Repository repository, string snapshotId, string dirPath)
     {
-        var formattedDirPath = dirPath.Replace(":\\", "/").Replace("\\", "/");
-        if (string.IsNullOrEmpty(formattedDirPath))
-        {
-            formattedDirPath = "/";
-        }
+        ValidateSnapshotId(snapshotId, nameof(snapshotId));
+
+        var formattedDirPath = string.IsNullOrWhiteSpace(dirPath)
+            ? "/"
+            : dirPath.Replace(":\\", "/").Replace("\\", "/");
         if (!formattedDirPath.StartsWith("/"))
         {
             formattedDirPath = $"/{formattedDirPath}";
@@ -216,13 +243,16 @@ public class ResticService : IResticService
             formattedDirPath = formattedDirPath.TrimEnd('/');
         }
 
-        var arguments = $@"-r ""{repository.Path}"" ls {snapshotId} ""{formattedDirPath}"" --json";
-        _logger.LogDebug("restic 参数: {Arguments}", arguments);
+        var args = new List<string> { "-r", repository.Path, "ls", snapshotId, formattedDirPath, "--json" };
+        _logger.LogDebug("restic 参数: {Arguments}", string.Join(" ", args));
 
         Stopwatch stopwatch = new Stopwatch();
         stopwatch.Start();
 
-        var (outputLines, errorLines, exitCode) = await ExecuteResticCommandWithLineOutputAsync(repository, arguments, repository.Password);
+        var (outputLines, errorLines, exitCode) = await ExecuteResticCommandWithLineOutputAsync(
+            repository,
+            args,
+            new[] { repository.Password });
 
         if (exitCode != 0)
         {
@@ -261,15 +291,18 @@ public class ResticService : IResticService
         }
 
         stopwatch.Stop();
-        _logger.LogInformation($"成功获取文件列表，共 {files.Count} 个文件,耗时：{stopwatch.ElapsedMilliseconds} ms");
+        _logger.LogInformation("成功获取文件列表，共 {Count} 个文件,耗时：{ElapsedMs} ms", files.Count, stopwatch.ElapsedMilliseconds);
 
         // 如果返回的是目录本身的信息，我们需要获取该目录下的文件
         if (files.Count(f => !string.IsNullOrEmpty(f.Type)) == 0 && files.Count == 1)
         {
             // 重新执行命令获取目录内容
             var targetPath = files.FirstOrDefault()?.Paths?.FirstOrDefault() ?? formattedDirPath;
-            var newArgs = $@"-r ""{repository.Path}"" ls {snapshotId} ""{targetPath}"" --json";
-            var (retryOutputLines, retryErrorLines, retryExitCode) = await ExecuteResticCommandWithLineOutputAsync(repository, newArgs, repository.Password);
+            var retryArgs = new List<string> { "-r", repository.Path, "ls", snapshotId, targetPath, "--json" };
+            var (retryOutputLines, retryErrorLines, retryExitCode) = await ExecuteResticCommandWithLineOutputAsync(
+                repository,
+                retryArgs,
+                new[] { repository.Password });
 
             if (retryExitCode != 0)
             {
@@ -311,18 +344,22 @@ public class ResticService : IResticService
         return files.Where(n => !string.IsNullOrEmpty(n.Type)).ToList();
     }
 
-
     public async Task<SnapshotDiffResult> DiffSnapshotsAsync(Repository repository, string snapshotId1, string snapshotId2)
     {
-        // 先尝试使用--json参数获取JSON格式输出
-        var arguments = $"diff {snapshotId1} {snapshotId2} --repo \"{repository.Path}\" --json";
-        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, arguments, repository.Password);
+        ValidateSnapshotId(snapshotId1, nameof(snapshotId1));
+        ValidateSnapshotId(snapshotId2, nameof(snapshotId2));
 
-        // 如果不支持--json参数，则使用默认输出
-        if (exitCode != 0 && error.Contains("--json"))
+        // 先尝试使用 --json 参数获取 JSON 格式输出
+        var args = new List<string> { "diff", snapshotId1, snapshotId2, "--repo", repository.Path, "--json" };
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, args, new[] { repository.Password });
+        var usedJson = true;
+
+        // 如果不支持 --json 参数，则降级为纯文本输出
+        if (exitCode != 0 && error.Contains("--json", StringComparison.OrdinalIgnoreCase))
         {
-            arguments = $"diff {snapshotId1} {snapshotId2} --repo \"{repository.Path}\"";
-            (output, error, exitCode) = await ExecuteResticCommandAsync(repository, arguments, repository.Password);
+            usedJson = false;
+            args = new List<string> { "diff", snapshotId1, snapshotId2, "--repo", repository.Path };
+            (output, error, exitCode) = await ExecuteResticCommandAsync(repository, args, new[] { repository.Password });
         }
 
         if (exitCode != 0)
@@ -331,24 +368,37 @@ public class ResticService : IResticService
             throw new Exception($"比较快照差异失败: {error}");
         }
 
+        var diffResult = usedJson
+            ? ParseJsonDiffOutput(output)
+            : ParsePlainTextDiffOutput(output, snapshotId1, snapshotId2);
+
+        _logger.LogInformation("快照差异比较成功: {SnapshotId1} vs {SnapshotId2}", snapshotId1, snapshotId2);
+        return diffResult;
+    }
+
+    private SnapshotDiffResult ParseJsonDiffOutput(string output)
+    {
         var diffResult = new SnapshotDiffResult();
-        
-        // 解析JSON Lines格式的输出
-        foreach (var line in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+
+        foreach (var rawLine in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
         {
+            var line = rawLine.Trim();
+            if (string.IsNullOrEmpty(line))
+                continue;
+
             try
             {
-                // 尝试反序列化每一行
                 using var document = JsonDocument.Parse(line);
                 var root = document.RootElement;
-                
+
                 if (root.TryGetProperty("message_type", out var messageTypeElement))
                 {
                     var messageType = messageTypeElement.GetString();
                     if (messageType == "change")
                     {
                         var change = JsonSerializer.Deserialize<SnapshotDiffChange>(line);
-                        diffResult.Changes.Add(change);
+                        if (change != null)
+                            diffResult.Changes.Add(change);
                     }
                     else if (messageType == "statistics")
                     {
@@ -362,18 +412,111 @@ public class ResticService : IResticService
             }
         }
 
-        _logger.LogInformation("快照差异比较成功: {SnapshotId1} vs {SnapshotId2}", snapshotId1, snapshotId2);
+        return diffResult;
+    }
+
+    private static SnapshotDiffResult ParsePlainTextDiffOutput(string output, string snapshotId1, string snapshotId2)
+    {
+        var diffResult = new SnapshotDiffResult();
+        SnapshotDiffStatistics stats = null;
+
+        SnapshotDiffStatistics EnsureStats()
+        {
+            stats ??= new SnapshotDiffStatistics
+            {
+                MessageType = "statistics",
+                SourceSnapshot = snapshotId1,
+                TargetSnapshot = snapshotId2,
+                Added = new SnapshotDiffAddRemoveStats(),
+                Removed = new SnapshotDiffAddRemoveStats()
+            };
+            return stats;
+        }
+
+        foreach (var rawLine in output.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var line = rawLine.TrimEnd('\r');
+            if (string.IsNullOrWhiteSpace(line))
+                continue;
+
+            var trimmed = line.Trim();
+
+            var filesMatch = PlainDiffFilesRegex.Match(trimmed);
+            if (filesMatch.Success)
+            {
+                var s = EnsureStats();
+                s.Added.Files = int.Parse(filesMatch.Groups[1].Value);
+                s.Removed.Files = int.Parse(filesMatch.Groups[2].Value);
+                s.ChangedFiles = int.Parse(filesMatch.Groups[3].Value);
+                continue;
+            }
+
+            var dirsMatch = PlainDiffDirsRegex.Match(trimmed);
+            if (dirsMatch.Success)
+            {
+                var s = EnsureStats();
+                s.Added.Dirs = int.Parse(dirsMatch.Groups[1].Value);
+                s.Removed.Dirs = int.Parse(dirsMatch.Groups[2].Value);
+                continue;
+            }
+
+            var othersMatch = PlainDiffOthersRegex.Match(trimmed);
+            if (othersMatch.Success)
+            {
+                var s = EnsureStats();
+                s.Added.Others = int.Parse(othersMatch.Groups[1].Value);
+                s.Removed.Others = int.Parse(othersMatch.Groups[2].Value);
+                continue;
+            }
+
+            var dataBlobsMatch = PlainDiffDataBlobsRegex.Match(trimmed);
+            if (dataBlobsMatch.Success)
+            {
+                var s = EnsureStats();
+                s.Added.DataBlobs = int.Parse(dataBlobsMatch.Groups[1].Value);
+                s.Removed.DataBlobs = int.Parse(dataBlobsMatch.Groups[2].Value);
+                continue;
+            }
+
+            var treeBlobsMatch = PlainDiffTreeBlobsRegex.Match(trimmed);
+            if (treeBlobsMatch.Success)
+            {
+                var s = EnsureStats();
+                s.Added.TreeBlobs = int.Parse(treeBlobsMatch.Groups[1].Value);
+                s.Removed.TreeBlobs = int.Parse(treeBlobsMatch.Groups[2].Value);
+                continue;
+            }
+
+            var changeMatch = PlainDiffChangeRegex.Match(line);
+            if (changeMatch.Success)
+            {
+                var path = changeMatch.Groups[2].Value.Trim();
+                if (path.StartsWith('/'))
+                {
+                    diffResult.Changes.Add(new SnapshotDiffChange
+                    {
+                        MessageType = "change",
+                        Modifier = changeMatch.Groups[1].Value,
+                        Path = path
+                    });
+                }
+            }
+        }
+
+        diffResult.Statistics = stats;
         return diffResult;
     }
 
     public async Task RestoreSnapshotAsync(Repository repository, string snapshotId, string targetPath, bool verify = false)
     {
-        var arguments = $"restore {snapshotId} --repo \"{repository.Path}\" --target \"{targetPath}\"";
+        ValidateSnapshotId(snapshotId, nameof(snapshotId));
+
+        var args = new List<string> { "restore", snapshotId, "--repo", repository.Path, "--target", targetPath };
         if (verify)
         {
-            arguments += " --verify";
+            args.Add("--verify");
         }
-        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, arguments, repository.Password);
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, args, new[] { repository.Password });
 
         if (exitCode != 0)
         {
@@ -386,12 +529,20 @@ public class ResticService : IResticService
 
     public async Task RestoreFileAsync(Repository repository, string snapshotId, string filePath, string restorePath, bool verify = false)
     {
-        var arguments = $"restore {snapshotId} --repo \"{repository.Path}\" --include \"{filePath}\" --target \"{restorePath}\"";
+        ValidateSnapshotId(snapshotId, nameof(snapshotId));
+
+        var args = new List<string>
+        {
+            "restore", snapshotId,
+            "--repo", repository.Path,
+            "--include", filePath,
+            "--target", restorePath
+        };
         if (verify)
         {
-            arguments += " --verify";
+            args.Add("--verify");
         }
-        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, arguments, repository.Password);
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, args, new[] { repository.Password });
 
         if (exitCode != 0)
         {
@@ -404,13 +555,10 @@ public class ResticService : IResticService
 
     public async Task DeleteSnapshotAsync(Repository repository, string snapshotId)
     {
-        // 与批量删除/ListSnapshotsByIdsAsync 一致：只接受 4~64 位十六进制，防止命令行注入
-        if (string.IsNullOrWhiteSpace(snapshotId) ||
-            !System.Text.RegularExpressions.Regex.IsMatch(snapshotId, "^[a-fA-F0-9]{4,64}$"))
-            throw new ArgumentException($"非法的快照 ID: {snapshotId}", nameof(snapshotId));
+        ValidateSnapshotId(snapshotId, nameof(snapshotId));
 
-        var arguments = $"forget {snapshotId} --repo \"{repository.Path}\" --prune";
-        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, arguments, repository.Password);
+        var args = new List<string> { "forget", snapshotId, "--repo", repository.Path, "--prune" };
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, args, new[] { repository.Password });
 
         if (exitCode != 0)
         {
@@ -441,17 +589,19 @@ public class ResticService : IResticService
         if (idList.Count == 0)
             throw new ArgumentException("快照ID不能为空", nameof(snapshotIds));
 
-        // 与 ListSnapshotsByIdsAsync 一致：只接受 4~64 位十六进制，防止命令行注入
         foreach (var id in idList)
         {
-            if (!System.Text.RegularExpressions.Regex.IsMatch(id, "^[a-fA-F0-9]{4,64}$"))
-                throw new ArgumentException($"非法的快照 ID: {id}", nameof(snapshotIds));
+            ValidateSnapshotId(id, nameof(snapshotIds));
         }
 
         // restic forget 原生支持一次传入多个快照 ID
-        var idArgs = string.Join(" ", idList.Select(id => $"\"{id}\""));
-        var arguments = $"forget {idArgs} --repo \"{repository.Path}\" --prune";
-        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, arguments, repository.Password);
+        var args = new List<string> { "forget" };
+        args.AddRange(idList);
+        args.Add("--repo");
+        args.Add(repository.Path);
+        args.Add("--prune");
+
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, args, new[] { repository.Password });
 
         if (exitCode != 0)
         {
@@ -471,16 +621,45 @@ public class ResticService : IResticService
         _logger.LogInformation("批量删除快照成功，共 {Count} 条", idList.Count);
     }
 
-    public async Task PruneSnapshotsAsync(Repository repository, int keepDaily, int keepWeekly, int keepMonthly, int? keepYearly)
+    public async Task PruneSnapshotsAsync(Repository repository, int? keepDaily, int? keepWeekly, int? keepMonthly, int? keepYearly)
     {
-        var arguments = $"forget --repo \"{repository.Path}\" --keep-daily {keepDaily} --keep-weekly {keepWeekly} --keep-monthly {keepMonthly}";
+        var args = new List<string> { "forget", "--repo", repository.Path };
+        var hasRetention = false;
+
+        if (keepDaily.HasValue && keepDaily.Value > 0)
+        {
+            args.Add("--keep-daily");
+            args.Add(keepDaily.Value.ToString());
+            hasRetention = true;
+        }
+        if (keepWeekly.HasValue && keepWeekly.Value > 0)
+        {
+            args.Add("--keep-weekly");
+            args.Add(keepWeekly.Value.ToString());
+            hasRetention = true;
+        }
+        if (keepMonthly.HasValue && keepMonthly.Value > 0)
+        {
+            args.Add("--keep-monthly");
+            args.Add(keepMonthly.Value.ToString());
+            hasRetention = true;
+        }
         if (keepYearly.HasValue && keepYearly.Value > 0)
         {
-            arguments += $" --keep-yearly {keepYearly.Value}";
+            args.Add("--keep-yearly");
+            args.Add(keepYearly.Value.ToString());
+            hasRetention = true;
         }
-        arguments += " --prune";
 
-        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, arguments, repository.Password);
+        if (!hasRetention)
+        {
+            _logger.LogInformation("未配置任何有效的快照保留策略，跳过快照清理");
+            return;
+        }
+
+        args.Add("--prune");
+
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, args, new[] { repository.Password });
 
         if (exitCode != 0)
         {
@@ -493,12 +672,16 @@ public class ResticService : IResticService
 
     public async Task<string> CheckRepositoryAsync(Repository repository, string readDataSubset = null)
     {
-        var arguments = $"check --repo \"{repository.Path}\"";
+        var args = new List<string> { "check", "--repo", repository.Path };
         if (!string.IsNullOrWhiteSpace(readDataSubset))
         {
-            arguments += $" --read-data-subset={readDataSubset.Trim()}";
+            var trimmed = readDataSubset.Trim();
+            if (!ReadDataSubsetRegex.IsMatch(trimmed))
+                throw new ArgumentException($"非法的数据校验子集参数: {readDataSubset}", nameof(readDataSubset));
+
+            args.Add($"--read-data-subset={trimmed}");
         }
-        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, arguments, repository.Password);
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, args, new[] { repository.Password });
 
         if (exitCode != 0)
         {
@@ -512,8 +695,8 @@ public class ResticService : IResticService
 
     public async Task<RepositoryStats> GetStatsAsync(Repository repository)
     {
-        var arguments = $"stats --repo \"{repository.Path}\" --json";
-        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, arguments, repository.Password);
+        var args = new List<string> { "stats", "--repo", repository.Path, "--json" };
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, args, new[] { repository.Password });
 
         if (exitCode != 0)
         {
@@ -536,23 +719,37 @@ public class ResticService : IResticService
 
     public async Task<bool> IsRepositoryInitializedAsync(Repository repository)
     {
-        var arguments = $"snapshots --repo \"{repository.Path}\"";
-        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, arguments, repository.Password);
+        var args = new List<string> { "snapshots", "--repo", repository.Path };
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, args, new[] { repository.Password });
 
-        // 如果返回码为0，说明仓库已初始化
-        var isInitialized = exitCode == 0;
-        _logger.LogInformation("仓库初始化状态检查: {IsInitialized}", isInitialized);
-        return isInitialized;
+        if (exitCode == 0)
+        {
+            _logger.LogInformation("仓库初始化状态检查: True");
+            return true;
+        }
+
+        var err = error ?? string.Empty;
+        if (err.Contains("Is there a repository", StringComparison.OrdinalIgnoreCase) ||
+            err.Contains("unable to open config file", StringComparison.OrdinalIgnoreCase) ||
+            err.Contains("does not exist", StringComparison.OrdinalIgnoreCase) ||
+            err.Contains("no such file", StringComparison.OrdinalIgnoreCase))
+        {
+            _logger.LogInformation("仓库初始化状态检查: False");
+            return false;
+        }
+
+        _logger.LogError("检查仓库初始化状态失败: {Error}", error);
+        throw new Exception($"检查仓库初始化状态失败: {error}");
     }
 
     public async Task<string> UnlockRepositoryAsync(Repository repository, bool removeAll = false)
     {
-        var arguments = $"unlock --repo \"{repository.Path}\"";
+        var args = new List<string> { "unlock", "--repo", repository.Path };
         if (removeAll)
         {
-            arguments += " --remove-all";
+            args.Add("--remove-all");
         }
-        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, arguments, repository.Password);
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, args, new[] { repository.Password });
 
         if (exitCode != 0)
         {
@@ -566,8 +763,8 @@ public class ResticService : IResticService
 
     public async Task<string> PruneRepositoryAsync(Repository repository)
     {
-        var arguments = $"prune --repo \"{repository.Path}\"";
-        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, arguments, repository.Password);
+        var args = new List<string> { "prune", "--repo", repository.Path };
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, args, new[] { repository.Password });
 
         if (exitCode != 0)
         {
@@ -581,8 +778,8 @@ public class ResticService : IResticService
 
     public async Task<string> RepairIndexAsync(Repository repository)
     {
-        var arguments = $"repair index --repo \"{repository.Path}\"";
-        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, arguments, repository.Password);
+        var args = new List<string> { "repair", "index", "--repo", repository.Path };
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, args, new[] { repository.Password });
 
         if (exitCode != 0)
         {
@@ -596,8 +793,8 @@ public class ResticService : IResticService
 
     public async Task<string> RepairSnapshotsAsync(Repository repository)
     {
-        var arguments = $"repair snapshots --repo \"{repository.Path}\" --forget";
-        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, arguments, repository.Password);
+        var args = new List<string> { "repair", "snapshots", "--repo", repository.Path, "--forget" };
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, args, new[] { repository.Password });
 
         if (exitCode != 0)
         {
@@ -611,8 +808,10 @@ public class ResticService : IResticService
 
     public async Task DumpFileAsync(Repository repository, string snapshotId, string filePath, Stream output)
     {
-        var arguments = $"dump {snapshotId} \"{filePath}\" --repo \"{repository.Path}\"";
-        var (error, exitCode) = await ExecuteResticCommandToStreamAsync(repository, arguments, output, repository.Password);
+        ValidateSnapshotId(snapshotId, nameof(snapshotId));
+
+        var args = new List<string> { "dump", snapshotId, filePath, "--repo", repository.Path };
+        var (error, exitCode) = await ExecuteResticCommandToStreamAsync(repository, args, output, new[] { repository.Password });
 
         if (exitCode != 0)
         {
@@ -628,8 +827,8 @@ public class ResticService : IResticService
         if (string.IsNullOrWhiteSpace(pattern))
             throw new ArgumentException("搜索模式不能为空", nameof(pattern));
 
-        var arguments = $"find \"{pattern}\" --repo \"{repository.Path}\" --json";
-        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, arguments, repository.Password);
+        var args = new List<string> { "find", pattern, "--repo", repository.Path, "--json" };
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, args, new[] { repository.Password });
 
         if (exitCode != 0)
         {
@@ -656,16 +855,15 @@ public class ResticService : IResticService
 
     public async Task SetSnapshotTagsAsync(Repository repository, string snapshotId, List<string> tags)
     {
-        if (string.IsNullOrWhiteSpace(snapshotId))
-            throw new ArgumentException("快照ID不能为空", nameof(snapshotId));
+        ValidateSnapshotId(snapshotId, nameof(snapshotId));
 
         // --set 传空字符串表示清除全部标签
         var tagValue = tags == null || tags.Count == 0
             ? string.Empty
             : string.Join(",", tags.Select(t => t.Trim()).Where(t => !string.IsNullOrEmpty(t)));
 
-        var arguments = $"tag {snapshotId} --repo \"{repository.Path}\" --set \"{tagValue}\"";
-        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, arguments, repository.Password);
+        var args = new List<string> { "tag", snapshotId, "--repo", repository.Path, "--set", tagValue };
+        var (output, error, exitCode) = await ExecuteResticCommandAsync(repository, args, new[] { repository.Password });
 
         if (exitCode != 0)
         {
@@ -676,167 +874,178 @@ public class ResticService : IResticService
         _logger.LogInformation("快照标签设置成功: {SnapshotId}", snapshotId);
     }
 
-    /// <summary>
-    /// 递归对树节点进行排序
-    /// </summary>
-    /// <param name="nodes">节点列表</param>
-    private void SortTreeNodes(List<ResticFileTreeNode> nodes)
-    {
-        // 先对当前层节点按名称排序（目录优先，然后是文件）
-        nodes.Sort((a, b) =>
-        {
-            // 目录优先于文件
-            if (a.Type == "dir" && b.Type != "dir")
-                return -1;
-            if (a.Type != "dir" && b.Type == "dir")
-                return 1;
-
-            // 相同类型按名称排序
-            return string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase);
-        });
-
-        // 递归对子节点排序
-        foreach (var node in nodes)
-        {
-            if (node.Children.Any())
-            {
-                SortTreeNodes(node.Children);
-            }
-        }
-    }
-
-    private async Task<(string output, string error, int exitCode)> ExecuteResticCommandAsync(Repository repository, string arguments, params string[] inputs)
+    private ProcessStartInfo BuildStartInfo(Repository repository, IEnumerable<string> arguments, bool redirectUtf8Output = true)
     {
         var startInfo = new ProcessStartInfo
         {
             FileName = _resticPath,
-            Arguments = arguments,
             RedirectStandardInput = true,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8,
             StandardErrorEncoding = Encoding.UTF8
         };
-        ResticEnvironmentBuilder.Apply(startInfo, repository);
 
-        using var process = new Process { StartInfo = startInfo };
-        process.Start();
-
-        // 输入参数
-        if (inputs != null && inputs.Length > 0)
+        if (redirectUtf8Output)
         {
-            foreach (var input in inputs)
-            {
-                await process.StandardInput.WriteLineAsync(input);
-            }
-            process.StandardInput.Close();
+            startInfo.StandardOutputEncoding = Encoding.UTF8;
         }
 
-        var outputTask = process.StandardOutput.ReadToEndAsync();
-        var errorTask = process.StandardError.ReadToEndAsync();
+        foreach (var arg in arguments)
+        {
+            startInfo.ArgumentList.Add(arg);
+        }
 
-        await process.WaitForExitAsync();
-
-        var output = await outputTask;
-        var error = await errorTask;
-
-        return (output, error, process.ExitCode);
+        ResticEnvironmentBuilder.Apply(startInfo, repository);
+        return startInfo;
     }
 
-
-    private async Task<(List<string> outputLines, List<string> errorLines, int exitCode)> ExecuteResticCommandWithLineOutputAsync(Repository repository, string arguments, params string[] inputs)
+    private static async Task WriteInputsAsync(Process process, IEnumerable<string> inputs, CancellationToken cancellationToken)
     {
-        var startInfo = new ProcessStartInfo
+        try
         {
-            FileName = _resticPath,
-            Arguments = arguments,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            StandardOutputEncoding = Encoding.UTF8,
-            StandardErrorEncoding = Encoding.UTF8
-        };
-        ResticEnvironmentBuilder.Apply(startInfo, repository);
+            if (inputs != null)
+            {
+                foreach (var input in inputs)
+                {
+                    await process.StandardInput.WriteLineAsync((input ?? string.Empty).AsMemory(), cancellationToken);
+                }
+            }
+        }
+        catch (IOException)
+        {
+            // 子进程可能已提前退出（Broken Pipe），忽略写入异常以保留真实 stderr
+        }
+        finally
+        {
+            try
+            {
+                process.StandardInput.Close();
+            }
+            catch
+            {
+                // 忽略关闭异常
+            }
+        }
+    }
 
-        using var process = new Process { StartInfo = startInfo };
+    private static async Task<List<string>> ReadAllLinesAsync(StreamReader reader, CancellationToken cancellationToken)
+    {
+        var lines = new List<string>();
+        while (true)
+        {
+            var line = await reader.ReadLineAsync(cancellationToken);
+            if (line == null)
+                break;
+
+            if (line.Length > 0)
+                lines.Add(line);
+        }
+        return lines;
+    }
+
+    private static void TryKillProcess(Process process)
+    {
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+            }
+        }
+        catch
+        {
+            // 进程可能已退出或不可终止，忽略
+        }
+    }
+
+    private async Task<(string output, string error, int exitCode)> ExecuteResticCommandAsync(
+        Repository repository,
+        IEnumerable<string> arguments,
+        IEnumerable<string> inputs = null,
+        CancellationToken cancellationToken = default)
+    {
+        using var process = new Process { StartInfo = BuildStartInfo(repository, arguments) };
         process.Start();
 
-        // 输入参数
-        if (inputs != null && inputs.Length > 0)
+        try
         {
-            foreach (var input in inputs)
-            {
-                await process.StandardInput.WriteLineAsync(input);
-            }
-            process.StandardInput.Close();
+            var outputTask = process.StandardOutput.ReadToEndAsync(cancellationToken);
+            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+
+            await WriteInputsAsync(process, inputs, cancellationToken);
+
+            await Task.WhenAll(outputTask, errorTask);
+            await process.WaitForExitAsync(cancellationToken);
+
+            return (await outputTask, await errorTask, process.ExitCode);
         }
-
-        var outputLines = new List<string>();
-        var errorLines = new List<string>();
-
-        process.OutputDataReceived += (sender, e) =>
+        catch
         {
-            if (!string.IsNullOrEmpty(e.Data))
-                outputLines.Add(e.Data);
-        };
+            TryKillProcess(process);
+            throw;
+        }
+    }
 
-        process.ErrorDataReceived += (sender, e) =>
+    private async Task<(List<string> outputLines, List<string> errorLines, int exitCode)> ExecuteResticCommandWithLineOutputAsync(
+        Repository repository,
+        IEnumerable<string> arguments,
+        IEnumerable<string> inputs = null,
+        CancellationToken cancellationToken = default)
+    {
+        using var process = new Process { StartInfo = BuildStartInfo(repository, arguments) };
+        process.Start();
+
+        try
         {
-            if (!string.IsNullOrEmpty(e.Data))
-                errorLines.Add(e.Data);
-        };
+            var outputTask = ReadAllLinesAsync(process.StandardOutput, cancellationToken);
+            var errorTask = ReadAllLinesAsync(process.StandardError, cancellationToken);
 
-        process.BeginOutputReadLine();
-        process.BeginErrorReadLine();
+            await WriteInputsAsync(process, inputs, cancellationToken);
 
-        await process.WaitForExitAsync();
+            await Task.WhenAll(outputTask, errorTask);
+            await process.WaitForExitAsync(cancellationToken);
 
-        return (outputLines, errorLines, process.ExitCode);
+            return (await outputTask, await errorTask, process.ExitCode);
+        }
+        catch
+        {
+            TryKillProcess(process);
+            throw;
+        }
     }
 
     /// <summary>
     /// 执行 restic 命令并把标准输出的原始字节流复制到目标流（用于 dump 等二进制输出，
     /// 避免 UTF-8 解码破坏二进制内容）。返回标准错误文本与退出码。
     /// </summary>
-    private async Task<(string error, int exitCode)> ExecuteResticCommandToStreamAsync(Repository repository, string arguments, Stream output, params string[] inputs)
+    private async Task<(string error, int exitCode)> ExecuteResticCommandToStreamAsync(
+        Repository repository,
+        IEnumerable<string> arguments,
+        Stream output,
+        IEnumerable<string> inputs = null,
+        CancellationToken cancellationToken = default)
     {
-        var startInfo = new ProcessStartInfo
-        {
-            FileName = _resticPath,
-            Arguments = arguments,
-            RedirectStandardInput = true,
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            CreateNoWindow = true,
-            StandardErrorEncoding = Encoding.UTF8
-        };
-        ResticEnvironmentBuilder.Apply(startInfo, repository);
-
-        using var process = new Process { StartInfo = startInfo };
+        using var process = new Process { StartInfo = BuildStartInfo(repository, arguments, redirectUtf8Output: false) };
         process.Start();
 
-        // 输入参数（密码）
-        if (inputs != null && inputs.Length > 0)
+        try
         {
-            foreach (var input in inputs)
-            {
-                await process.StandardInput.WriteLineAsync(input);
-            }
-            process.StandardInput.Close();
+            var errorTask = process.StandardError.ReadToEndAsync(cancellationToken);
+            var copyTask = process.StandardOutput.BaseStream.CopyToAsync(output, cancellationToken);
+
+            await WriteInputsAsync(process, inputs, cancellationToken);
+
+            await Task.WhenAll(copyTask, errorTask);
+            await process.WaitForExitAsync(cancellationToken);
+
+            return (await errorTask, process.ExitCode);
         }
-
-        // 并发读取标准错误，避免缓冲区写满导致死锁
-        var errorTask = process.StandardError.ReadToEndAsync();
-        var copyTask = process.StandardOutput.BaseStream.CopyToAsync(output);
-
-        await Task.WhenAll(copyTask, errorTask);
-        await process.WaitForExitAsync();
-
-        return (await errorTask, process.ExitCode);
+        catch
+        {
+            TryKillProcess(process);
+            throw;
+        }
     }
 }

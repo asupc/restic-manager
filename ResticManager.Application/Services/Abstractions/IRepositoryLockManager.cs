@@ -11,5 +11,5 @@ public interface IRepositoryLockManager
     /// 获取指定仓库的互斥锁。返回的句柄 Dispose 时归还信号量，
     /// 建议 <c>await using</c> 持有。等待期间调用方挂起，不占用线程。
     /// </summary>
-    Task<IAsyncDisposable> AcquireAsync(int repositoryId);
+    Task<IAsyncDisposable> AcquireAsync(int repositoryId, CancellationToken cancellationToken = default);
 }

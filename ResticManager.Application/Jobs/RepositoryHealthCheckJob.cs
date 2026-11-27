@@ -9,6 +9,7 @@ namespace ResticManager.Application.Jobs;
 /// 定时遍历所有已初始化仓库执行 restic check 的 Quartz Job。
 /// 由 QuartzSchedulerService 统一注册。
 /// </summary>
+[DisallowConcurrentExecution]
 public class RepositoryHealthCheckJob : IJob
 {
     public const string JobKeyName = "RepositoryHealthCheckJob";

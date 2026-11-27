@@ -28,6 +28,7 @@ public class SnapshotService : ISnapshotService
     public async Task<List<BackupSnapshot>> GetByRepositoryAsync(int repositoryId, bool includeDeleted = false)
     {
         var query = _context.BackupSnapshots
+            .AsNoTracking()
             .Where(s => s.RepositoryId == repositoryId);
 
         if (!includeDeleted)
@@ -48,7 +49,7 @@ public class SnapshotService : ISnapshotService
         var existing = await _context.BackupSnapshots
             .FirstOrDefaultAsync(s => s.RepositoryId == repositoryId && s.SnapshotId == info.Id);
 
-        var now = DateTime.Now;
+        var now = DateTime.UtcNow;
 
         if (existing == null)
         {
@@ -79,13 +80,15 @@ public class SnapshotService : ISnapshotService
 
     public async Task<SyncSnapshotsResult> SyncRepositoryAsync(int repositoryId)
     {
-        var repository = await _context.Repositories.FindAsync(repositoryId);
+        var repository = await _context.Repositories
+            .AsNoTracking()
+            .FirstOrDefaultAsync(r => r.Id == repositoryId);
         if (repository == null)
             throw new Exception("仓库未找到");
         if (!repository.IsInitialized)
             throw new Exception("仓库未初始化");
 
-        var syncStartedAt = DateTime.Now;
+        var syncStartedAt = DateTime.UtcNow;
 
         // 1. 从远端拉全量
         var remoteList = await _resticService.ListSnapshotsAsync(repository);
@@ -147,7 +150,9 @@ public class SnapshotService : ISnapshotService
         if (string.IsNullOrWhiteSpace(snapshotId))
             return null;
 
-        var repository = await _context.Repositories.FindAsync(repositoryId);
+        var repository = await _context.Repositories
+            .AsNoTracking()
+            .FirstOrDefaultAsync(r => r.Id == repositoryId);
         if (repository == null || !repository.IsInitialized)
             return null;
 
@@ -179,15 +184,17 @@ public class SnapshotService : ISnapshotService
         if (string.IsNullOrWhiteSpace(snapshotId))
             return;
 
-        var candidates = await _context.BackupSnapshots
-            .Where(s => s.RepositoryId == repositoryId)
-            .ToListAsync();
-        var snap = MatchSnapshot(candidates, snapshotId);
+        var id = snapshotId.Trim();
+        var snap = await _context.BackupSnapshots
+            .FirstOrDefaultAsync(s => s.RepositoryId == repositoryId && !s.IsDeleted && s.SnapshotId == id)
+            ?? await _context.BackupSnapshots
+                .FirstOrDefaultAsync(s => s.RepositoryId == repositoryId && !s.IsDeleted && s.SnapshotId.StartsWith(id));
+
         if (snap == null)
             return;
 
         snap.IsDeleted = true;
-        snap.LastSyncedAt = DateTime.Now;
+        snap.LastSyncedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync();
     }
 
@@ -196,39 +203,46 @@ public class SnapshotService : ISnapshotService
         if (snapshotIds == null)
             return 0;
 
-        var idList = snapshotIds.Where(id => !string.IsNullOrWhiteSpace(id)).Distinct().ToList();
+        var idList = snapshotIds
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id.Trim())
+            .Distinct()
+            .ToList();
         if (idList.Count == 0)
             return 0;
 
-        // restic 按 ID 前缀解析快照，这里按前缀兼容匹配，一次加载候选后批量标记
-        var candidates = await _context.BackupSnapshots
-            .Where(s => s.RepositoryId == repositoryId)
+        var now = DateTime.UtcNow;
+
+        // 先按精确 ID 在 SQL 层过滤未删除快照
+        var matched = await _context.BackupSnapshots
+            .Where(s => s.RepositoryId == repositoryId && !s.IsDeleted && idList.Contains(s.SnapshotId))
             .ToListAsync();
-        var now = DateTime.Now;
-        var marked = 0;
-        foreach (var id in idList)
+
+        var matchedIds = matched.Select(s => s.SnapshotId).ToHashSet(StringComparer.Ordinal);
+        var unmatchedIds = idList.Where(id => !matchedIds.Contains(id)).ToList();
+
+        // 对短 ID 前缀在 SQL 层按 StartsWith 查询，避免加载全仓库快照
+        foreach (var prefix in unmatchedIds)
         {
-            var snap = MatchSnapshot(candidates, id);
-            if (snap == null || snap.IsDeleted)
-                continue;
-            snap.IsDeleted = true;
-            snap.LastSyncedAt = now;
-            marked++;
+            var snap = await _context.BackupSnapshots
+                .FirstOrDefaultAsync(s => s.RepositoryId == repositoryId && !s.IsDeleted && s.SnapshotId.StartsWith(prefix));
+            if (snap != null && matchedIds.Add(snap.SnapshotId))
+            {
+                matched.Add(snap);
+            }
         }
 
-        if (marked > 0)
-            await _context.SaveChangesAsync();
-        return marked;
-    }
+        if (matched.Count == 0)
+            return 0;
 
-    /// <summary>
-    /// 按完整 ID / 双向前缀兼容匹配本地快照缓存（与 restic 按 ID 前缀解析的行为保持一致）。
-    /// </summary>
-    private static BackupSnapshot MatchSnapshot(IEnumerable<BackupSnapshot> candidates, string snapshotId)
-    {
-        return candidates.FirstOrDefault(s => s.SnapshotId == snapshotId)
-            ?? candidates.FirstOrDefault(s => s.SnapshotId.StartsWith(snapshotId, StringComparison.OrdinalIgnoreCase))
-            ?? candidates.FirstOrDefault(s => snapshotId.StartsWith(s.SnapshotId, StringComparison.OrdinalIgnoreCase));
+        foreach (var snap in matched)
+        {
+            snap.IsDeleted = true;
+            snap.LastSyncedAt = now;
+        }
+
+        await _context.SaveChangesAsync();
+        return matched.Count;
     }
 
     /// <summary>

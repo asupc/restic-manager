@@ -6,9 +6,6 @@ using ResticManager.Data;
 using ResticManager.Models;
 using ResticManager.Models.Dtos;
 using System.Text.Json;
-using System.Text.RegularExpressions;
-// 添加 EFCore.BulkExtensions 引用
-// using EFCore.BulkExtensions; // 不再需要这个引用
 
 namespace ResticManager.Application.Services.Implements;
 
@@ -16,23 +13,33 @@ public partial class RepositoryService : IRepositoryService
 {
     private readonly ResticManagerDbContext _context;
     private readonly IResticService _resticService;
+    private readonly IRepositoryLockManager _repositoryLockManager;
     private readonly ILogger<RepositoryService> _logger;
 
-    public RepositoryService(ResticManagerDbContext context, IResticService resticService, ILogger<RepositoryService> logger)
+    public RepositoryService(
+        ResticManagerDbContext context,
+        IResticService resticService,
+        IRepositoryLockManager repositoryLockManager,
+        ILogger<RepositoryService> logger)
     {
         _context = context;
         _resticService = resticService;
+        _repositoryLockManager = repositoryLockManager;
         _logger = logger;
     }
 
     public async Task<List<Repository>> GetAllRepositoriesAsync()
     {
-        return await _context.Repositories.ToListAsync();
+        return await _context.Repositories
+            .AsNoTracking()
+            .ToListAsync();
     }
 
     public async Task<Repository> GetRepositoryByIdAsync(int id)
     {
-        return await _context.Repositories.FindAsync(id);
+        return await _context.Repositories
+            .AsNoTracking()
+            .FirstOrDefaultAsync(r => r.Id == id);
     }
 
     public async Task<Repository> CreateRepositoryAsync(Repository repository)
@@ -42,6 +49,7 @@ public partial class RepositoryService : IRepositoryService
 
         ValidateRepository(repository);
 
+        repository.CreatedAt = DateTime.UtcNow;
         _context.Repositories.Add(repository);
         await _context.SaveChangesAsync();
         _logger.LogInformation("仓库已创建：{RepositoryId} {RepositoryName}", repository.Id, repository.Name);
@@ -50,25 +58,41 @@ public partial class RepositoryService : IRepositoryService
 
     public async Task<Repository> UpdateRepositoryAsync(int id, Repository repository)
     {
+        if (repository == null)
+            throw new ArgumentNullException(nameof(repository));
+
         var existingRepo = await _context.Repositories.FindAsync(id);
         if (existingRepo == null) return null;
 
         ValidateRepository(repository);
 
-        // 路径变了等于换了一个仓库，旧统计不再有效
-        var pathChanged = existingRepo.Path != repository.Path;
+        // 路径或类型变化等于切换了底层仓库，需要重置初始化状态、统计缓存与快照缓存
+        var pathChanged = !string.Equals(existingRepo.Path, repository.Path, StringComparison.Ordinal);
+        var typeChanged = !string.Equals(existingRepo.Type, repository.Type, StringComparison.OrdinalIgnoreCase);
 
         existingRepo.Name = repository.Name;
         existingRepo.Path = repository.Path;
-        existingRepo.Password = repository.Password;
-        existingRepo.Type = repository.Type;
-        existingRepo.CredentialsJson = repository.CredentialsJson;
-        existingRepo.IsInitialized = repository.IsInitialized;
 
-        if (pathChanged)
+        if (!string.IsNullOrEmpty(repository.Password))
         {
+            existingRepo.Password = repository.Password;
+        }
+
+        existingRepo.Type = repository.Type;
+
+        if (repository.CredentialsJson != null || typeChanged)
+        {
+            existingRepo.CredentialsJson = repository.CredentialsJson;
+        }
+
+        if (pathChanged || typeChanged)
+        {
+            existingRepo.IsInitialized = false;
             existingRepo.StatsJson = null;
             existingRepo.StatsUpdatedAt = null;
+            await _context.BackupSnapshots
+                .Where(s => s.RepositoryId == id)
+                .ExecuteDeleteAsync();
         }
 
         await _context.SaveChangesAsync();
@@ -109,6 +133,7 @@ public partial class RepositoryService : IRepositoryService
 
     public async Task<bool> ValidateRepositoryAsync(int id)
     {
+        await using var repoLock = await _repositoryLockManager.AcquireAsync(id);
         var repository = await _context.Repositories.FindAsync(id);
         if (repository == null)
             throw new Exception("仓库未找到");
@@ -139,40 +164,55 @@ public partial class RepositoryService : IRepositoryService
 
     public async Task<List<SnapshotInfo>> ListSnapshotsAsync(int id)
     {
-        var repository = await _context.Repositories.FindAsync(id);
-        if (repository == null)
-            throw new Exception("仓库未找到");
-
-        if (!repository.IsInitialized)
-            throw new Exception("仓库未初始化");
-
+        var repository = await GetInitializedRepositoryAsync(id);
         return await _resticService.ListSnapshotsAsync(repository);
     }
 
     public async Task<List<ResticFileTreeNode>> ListSubdirectoryFilesInSnapshotTreeAsync(int id, string snapshotId, string path)
     {
-        var repository = await _context.Repositories.FindAsync(id);
-        if (repository == null)
-            throw new Exception("仓库未找到");
-
-        if (!repository.IsInitialized)
-            throw new Exception("仓库未初始化");
+        var repository = await GetInitializedRepositoryAsync(id);
 
         path = PathFormat.Format(path);
 
         var allFiles = await _resticService.ListFilesInSnapshotAsync(repository, snapshotId, path);
 
+        // 单次 O(N) 构建非空父目录集合，消除 O(N^2) 嵌套扫描
+        var nonEmptyParents = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var file in allFiles)
+        {
+            if (string.IsNullOrEmpty(file.Path))
+                continue;
+
+            var normalized = NormalizeTreePath(file.Path);
+            if (normalized == "/")
+                continue;
+
+            var lastSlash = normalized.LastIndexOf('/');
+            if (lastSlash == 0)
+            {
+                nonEmptyParents.Add("/");
+            }
+            else if (lastSlash > 0)
+            {
+                nonEmptyParents.Add(normalized.Substring(0, lastSlash));
+            }
+        }
+
         var subdirectoryFiles = allFiles
             .Where(f => IsDirectChildOf(f.Path, path))
-            .Select(f => new ResticFileTreeNode
+            .Select(f =>
             {
-                Name = f.Name,
-                Type = f.Type,
-                Size = f.Size,
-                Path = f.Path,
-                Permissions = f.Permissions,
-                Mtime = f.Mtime,
-                IsLeaf = f.Type == "file" || !allFiles.Any(child => IsDirectChildOf(child.Path, f.Path))
+                var normalizedPath = NormalizeTreePath(f.Path);
+                return new ResticFileTreeNode
+                {
+                    Name = f.Name,
+                    Type = f.Type,
+                    Size = f.Size,
+                    Path = f.Path,
+                    Permissions = f.Permissions,
+                    Mtime = f.Mtime,
+                    IsLeaf = f.Type == "file" || !nonEmptyParents.Contains(normalizedPath)
+                };
             })
             .ToList();
 
@@ -191,48 +231,25 @@ public partial class RepositoryService : IRepositoryService
     /// <returns>快照差异结果</returns>
     public async Task<SnapshotDiffResult> DiffSnapshotsAsync(int id, string snapshotId1, string snapshotId2)
     {
-        var repository = await _context.Repositories.FindAsync(id);
-        if (repository == null)
-            throw new Exception("仓库未找到");
-
-        if (!repository.IsInitialized)
-            throw new Exception("仓库未初始化");
-
+        var repository = await GetInitializedRepositoryAsync(id);
         return await _resticService.DiffSnapshotsAsync(repository, snapshotId1, snapshotId2);
     }
 
     public async Task RestoreSnapshotAsync(int id, string snapshotId, string targetPath, bool verify = false)
     {
-        var repository = await _context.Repositories.FindAsync(id);
-        if (repository == null)
-            throw new Exception("仓库未找到");
-
-        if (!repository.IsInitialized)
-            throw new Exception("仓库未初始化");
-
+        var repository = await GetInitializedRepositoryAsync(id);
         await _resticService.RestoreSnapshotAsync(repository, snapshotId, targetPath, verify);
     }
 
     public async Task RestoreFileAsync(int id, string snapshotId, string filePath, string targetPath, bool verify = false)
     {
-        var repository = await _context.Repositories.FindAsync(id);
-        if (repository == null)
-            throw new Exception("仓库未找到");
-
-        if (!repository.IsInitialized)
-            throw new Exception("仓库未初始化");
-
+        var repository = await GetInitializedRepositoryAsync(id);
         await _resticService.RestoreFileAsync(repository, snapshotId, filePath, targetPath, verify);
     }
 
     public async Task DeleteSnapshotAsync(int id, string snapshotId)
     {
-        var repository = await _context.Repositories.FindAsync(id);
-        if (repository == null)
-            throw new Exception("仓库未找到");
-
-        if (!repository.IsInitialized)
-            throw new Exception("仓库未初始化");
+        var repository = await GetInitializedRepositoryAsync(id);
 
         if (string.IsNullOrWhiteSpace(snapshotId))
             throw new ArgumentException("快照ID不能为空", nameof(snapshotId));
@@ -242,13 +259,7 @@ public partial class RepositoryService : IRepositoryService
 
     public async Task DeleteSnapshotsAsync(int id, IEnumerable<string> snapshotIds)
     {
-        var repository = await _context.Repositories.FindAsync(id);
-        if (repository == null)
-            throw new Exception("仓库未找到");
-
-        if (!repository.IsInitialized)
-            throw new Exception("仓库未初始化");
-
+        var repository = await GetInitializedRepositoryAsync(id);
         await _resticService.DeleteSnapshotsAsync(repository, snapshotIds);
     }
 
@@ -284,6 +295,7 @@ public partial class RepositoryService : IRepositoryService
 
     public async Task DumpFileAsync(int id, string snapshotId, string filePath, Stream output)
     {
+        await using var repoLock = await _repositoryLockManager.AcquireAsync(id);
         var repository = await GetInitializedRepositoryAsync(id);
         await _resticService.DumpFileAsync(repository, snapshotId, filePath, output);
     }
@@ -301,10 +313,13 @@ public partial class RepositoryService : IRepositoryService
     }
 
     /// <summary>
-    /// 创建/更新时的仓库配置校验：类型白名单 + 按类型的 location 前缀 + 凭据 JSON 合法性
+    /// 创建/更新时的仓库配置校验：地址非空 + 类型白名单 + 按类型的 location 前缀 + 凭据 JSON 对象及字符串值合法性
     /// </summary>
     private static void ValidateRepository(Repository repository)
     {
+        if (string.IsNullOrWhiteSpace(repository.Path))
+            throw new ArgumentException("仓库地址不能为空");
+
         if (string.IsNullOrWhiteSpace(repository.Type) || !RepositoryTypes.All.Contains(repository.Type))
             throw new ArgumentException($"不支持的仓库类型: {repository.Type ?? "(空)"}，支持 local/sftp/rest/s3/b2/azure/gs/rclone");
 
@@ -317,7 +332,15 @@ public partial class RepositoryService : IRepositoryService
         {
             try
             {
-                using (JsonDocument.Parse(repository.CredentialsJson)) { }
+                using var doc = JsonDocument.Parse(repository.CredentialsJson);
+                if (doc.RootElement.ValueKind != JsonValueKind.Object)
+                    throw new ArgumentException("凭据 JSON 必须为对象格式");
+
+                foreach (var prop in doc.RootElement.EnumerateObject())
+                {
+                    if (prop.Value.ValueKind != JsonValueKind.String && prop.Value.ValueKind != JsonValueKind.Null)
+                        throw new ArgumentException($"凭据字段 {prop.Name} 必须为字符串类型");
+                }
             }
             catch (JsonException ex)
             {
@@ -328,11 +351,13 @@ public partial class RepositoryService : IRepositoryService
     }
 
     /// <summary>
-    /// 获取已初始化的仓库，未找到或未初始化时抛出异常
+    /// 获取已初始化的仓库（只读，不追踪），未找到或未初始化时抛出异常
     /// </summary>
     private async Task<Repository> GetInitializedRepositoryAsync(int id)
     {
-        var repository = await _context.Repositories.FindAsync(id);
+        var repository = await _context.Repositories
+            .AsNoTracking()
+            .FirstOrDefaultAsync(r => r.Id == id);
         if (repository == null)
             throw new Exception("仓库未找到");
 
@@ -342,38 +367,48 @@ public partial class RepositoryService : IRepositoryService
         return repository;
     }
 
+    private static string NormalizeTreePath(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return string.Empty;
+        return path.Length > 1 ? path.TrimEnd('/') : path;
+    }
+
     /// <summary>
     /// 判断一个路径是否为指定父路径的直接子项
     /// </summary>
     /// <param name="childPath">子路径</param>
     /// <param name="parentPath">父路径</param>
     /// <returns>是否为直接子项</returns>
-    private bool IsDirectChildOf(string childPath, string parentPath)
+    private static bool IsDirectChildOf(string childPath, string parentPath)
     {
-        // 如果父路径为空，则查找根目录下的文件
-        if (string.IsNullOrEmpty(parentPath))
+        if (string.IsNullOrEmpty(childPath))
+            return false;
+
+        var normalizedChild = NormalizeTreePath(childPath);
+
+        // 如果父路径为空或根目录，则查找根目录下的直接子项（排除 "/" 本身）
+        if (string.IsNullOrEmpty(parentPath) || parentPath == "/")
         {
-            // 根目录下的文件路径应该只包含一个斜杠（开头的斜杠）
-            return childPath.StartsWith("/") && childPath.Substring(1).IndexOf('/') == -1;
+            return normalizedChild.Length > 1
+                && normalizedChild.StartsWith('/')
+                && normalizedChild.IndexOf('/', 1) == -1;
         }
 
         // 确保父路径以斜杠结尾
-        if (!parentPath.EndsWith("/"))
-        {
-            parentPath += "/";
-        }
+        var parentPrefix = parentPath.EndsWith('/') ? parentPath : parentPath + "/";
 
-        // 检查childPath是否以parentPath开头
-        if (!childPath.StartsWith(parentPath))
+        // 检查 childPath 是否以 parentPrefix 开头
+        if (!normalizedChild.StartsWith(parentPrefix, StringComparison.Ordinal))
         {
             return false;
         }
 
         // 获取相对路径部分
-        var relativePath = childPath.Substring(parentPath.Length);
+        var relativePath = normalizedChild.Substring(parentPrefix.Length);
 
-        // 检查相对路径中是否还包含斜杠（表示更深层的子目录）
-        return relativePath.IndexOf('/') == -1;
+        // 相对路径非空且不含更深层斜杠
+        return relativePath.Length > 0 && relativePath.IndexOf('/') == -1;
     }
 
     /// <summary>

@@ -100,12 +100,12 @@ public interface IResticService
     /// 清理快照
     /// </summary>
     /// <param name="repository">仓库实体（含类型与凭据）</param>
-    /// <param name="keepDaily">保留每日快照数</param>
-    /// <param name="keepWeekly">保留每周快照数</param>
-    /// <param name="keepMonthly">保留每月快照数</param>
-    /// <param name="keepYearly">保留每年快照数，传 null 时不启用年度保留</param>
+    /// <param name="keepDaily">保留每日快照数，传 null 或 &lt;= 0 时不启用</param>
+    /// <param name="keepWeekly">保留每周快照数，传 null 或 &lt;= 0 时不启用</param>
+    /// <param name="keepMonthly">保留每月快照数，传 null 或 &lt;= 0 时不启用</param>
+    /// <param name="keepYearly">保留每年快照数，传 null 或 &lt;= 0 时不启用</param>
     /// <returns>无返回值</returns>
-    Task PruneSnapshotsAsync(Repository repository, int keepDaily, int keepWeekly, int keepMonthly, int? keepYearly);
+    Task PruneSnapshotsAsync(Repository repository, int? keepDaily, int? keepWeekly, int? keepMonthly, int? keepYearly);
 
     /// <summary>
     /// 检查仓库

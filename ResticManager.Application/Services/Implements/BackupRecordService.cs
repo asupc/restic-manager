@@ -11,7 +11,6 @@ public class BackupRecordService : IBackupRecordService
 {
     private readonly ResticManagerDbContext _context;
     private readonly ILogger<BackupRecordService> _logger;
-    //private readonly IBackupTaskService _taskService; // 用于校验任务存在性
 
     public BackupRecordService(ResticManagerDbContext context, ILogger<BackupRecordService> logger)
     {
@@ -25,6 +24,7 @@ public class BackupRecordService : IBackupRecordService
     public async Task<List<BackupRecord>> GetRecordsByTaskIdAsync(int taskId)
     {
         return await _context.BackupRecords
+            .AsNoTracking()
             .Where(r => r.BackupTaskId == taskId)
             .OrderByDescending(r => r.StartTime) // 按时间倒序（最新的在前）
             .ToListAsync();
@@ -35,10 +35,11 @@ public class BackupRecordService : IBackupRecordService
     /// </summary>
     public async Task<PagedResult<BackupRecord>> GetPagedRecordsByTaskIdAsync(int taskId, int page, int pageSize)
     {
-        if (page < 1) page = 1;
-        if (pageSize < 1) pageSize = 10;
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 100);
 
         var query = _context.BackupRecords
+            .AsNoTracking()
             .Where(r => r.BackupTaskId == taskId);
 
         var total = await query.CountAsync();
@@ -62,10 +63,11 @@ public class BackupRecordService : IBackupRecordService
     /// </summary>
     public async Task<PagedResult<BackupRecord>> GetPagedRecordsAsync(int page, int pageSize, int? taskId = null, string? status = null, string? keyword = null)
     {
-        if (page < 1) page = 1;
-        if (pageSize < 1) pageSize = 10;
+        page = Math.Max(1, page);
+        pageSize = Math.Clamp(pageSize, 1, 100);
 
         var query = _context.BackupRecords
+            .AsNoTracking()
             .Include(r => r.Task)
             .AsQueryable();
 
@@ -105,7 +107,9 @@ public class BackupRecordService : IBackupRecordService
     /// </summary>
     public async Task<BackupRecord> GetRecordByIdAsync(int id)
     {
-        return await _context.BackupRecords.FirstOrDefaultAsync(r => r.Id == id);
+        return await _context.BackupRecords
+            .AsNoTracking()
+            .FirstOrDefaultAsync(r => r.Id == id);
     }
 
     /// <summary>
@@ -114,7 +118,7 @@ public class BackupRecordService : IBackupRecordService
     public async Task<BackupRecord> CreateRecordAsync(BackupRecord record)
     {
         // 补充默认值
-        record.StartTime = record.StartTime == default ? DateTime.Now : record.StartTime;
+        record.StartTime = record.StartTime == default ? DateTime.UtcNow : record.StartTime;
         record.Status = string.IsNullOrEmpty(record.Status) ? "Running" : record.Status;
         _context.BackupRecords.Add(record);
         await _context.SaveChangesAsync();
@@ -127,15 +131,18 @@ public class BackupRecordService : IBackupRecordService
     /// </summary>
     public async Task<BackupRecord> UpdateRecordAsync(int id, BackupRecord updatedRecord)
     {
-        var existingRecord = await GetRecordByIdAsync(id);
+        var existingRecord = await _context.BackupRecords.FindAsync(id);
         if (existingRecord == null)
             return null;
+
         // 更新字段
         existingRecord.Status = updatedRecord.Status;
         existingRecord.EndTime = updatedRecord.EndTime;
         existingRecord.FilesProcessed = updatedRecord.FilesProcessed;
         existingRecord.DataTransferred = updatedRecord.DataTransferred;
         existingRecord.Output = updatedRecord.Output;
+        existingRecord.Error = updatedRecord.Error;
+        existingRecord.SummaryJson = updatedRecord.SummaryJson;
         existingRecord.BackupTaskId = updatedRecord.BackupTaskId; // 允许修改关联的任务
         await _context.SaveChangesAsync();
         _logger.LogInformation("备份记录已更新：{RecordId}", existingRecord.Id);
@@ -147,7 +154,7 @@ public class BackupRecordService : IBackupRecordService
     /// </summary>
     public async Task<bool> DeleteRecordAsync(int id)
     {
-        var record = await GetRecordByIdAsync(id);
+        var record = await _context.BackupRecords.FindAsync(id);
         if (record == null)
             return false;
 
@@ -163,6 +170,7 @@ public class BackupRecordService : IBackupRecordService
     public async Task<BackupRecord> GetLatestRecordByTaskIdAsync(int taskId)
     {
         return await _context.BackupRecords
+            .AsNoTracking()
             .Where(r => r.BackupTaskId == taskId)
             .OrderByDescending(r => r.StartTime)
             .FirstOrDefaultAsync();

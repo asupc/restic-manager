@@ -10,6 +10,7 @@ namespace ResticManager.Application.Jobs;
 /// 批量登记后台任务后立即返回。实际执行由 AsyncTaskService 排队（全局并发闸 +
 /// 每仓库锁 + 防重入），与页面手动入口走同一链路。由 QuartzSchedulerService 统一注册。
 /// </summary>
+[DisallowConcurrentExecution]
 public class MaintenanceJob : IJob
 {
     private readonly IServiceProvider _serviceProvider;

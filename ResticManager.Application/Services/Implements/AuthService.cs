@@ -10,6 +10,8 @@ namespace ResticManager.Application.Services.Implements;
 
 public class AuthService : IAuthService
 {
+    private static readonly SemaphoreSlim RegisterLock = new(1, 1);
+
     private readonly ResticManagerDbContext _context;
     private readonly JwtUtils _jwtUtils;
     private readonly IPasswordHasher<User> _passwordHasher;
@@ -25,30 +27,47 @@ public class AuthService : IAuthService
 
     public async Task<User> RegisterAsync(string username, string password, string email)
     {
-        // 检查是否已经存在用户，实现单用户模式
-        if (await _context.Users.AnyAsync())
+        if (string.IsNullOrWhiteSpace(username))
+            throw new ArgumentException("用户名不能为空", nameof(username));
+
+        if (string.IsNullOrEmpty(password) || password.Length < 6)
+            throw new ArgumentException("密码不能为空且长度至少为 6 位", nameof(password));
+
+        await RegisterLock.WaitAsync();
+        try
         {
-            _logger.LogWarning("拒绝注册：系统已存在用户（单用户模式）");
-            throw new Exception("系统已存在用户，无法注册更多用户");
+            // 检查是否已经存在用户，实现单用户模式
+            if (await _context.Users.AnyAsync())
+            {
+                _logger.LogWarning("拒绝注册：系统已存在用户（单用户模式）");
+                throw new Exception("系统已存在用户，无法注册更多用户");
+            }
+
+            var user = new User
+            {
+                Username = username.Trim(),
+                Email = email
+            };
+
+            user.PasswordHash = _passwordHasher.HashPassword(user, password);
+
+            _context.Users.Add(user);
+            await _context.SaveChangesAsync();
+
+            _logger.LogInformation("初始用户注册成功：{Username}", user.Username);
+            return user;
         }
-
-        var user = new User
+        finally
         {
-            Username = username,
-            Email = email
-        };
-
-        user.PasswordHash = _passwordHasher.HashPassword(user, password);
-
-        _context.Users.Add(user);
-        await _context.SaveChangesAsync();
-
-        _logger.LogInformation("初始用户注册成功：{Username}", username);
-        return user;
+            RegisterLock.Release();
+        }
     }
 
     public async Task<string> LoginAsync(string username, string password)
     {
+        if (string.IsNullOrWhiteSpace(username) || string.IsNullOrEmpty(password))
+            return null;
+
         var user = await _context.Users.FirstOrDefaultAsync(u => u.Username == username);
         if (user == null)
         {
@@ -63,13 +82,20 @@ public class AuthService : IAuthService
             return null;
         }
 
+        if (result == PasswordVerificationResult.SuccessRehashNeeded)
+        {
+            user.PasswordHash = _passwordHasher.HashPassword(user, password);
+            await _context.SaveChangesAsync();
+            _logger.LogInformation("用户 {Username} 密码哈希已按最新算法升级", username);
+        }
+
         _logger.LogInformation("用户登录成功：{Username}", username);
         return _jwtUtils.GenerateToken(user);
     }
-    
+
     // 检查是否存在用户
     public async Task<bool> HasAnyUserAsync()
     {
-        return await _context.Users.AnyAsync();
+        return await _context.Users.AsNoTracking().AnyAsync();
     }
 }

@@ -19,19 +19,23 @@ public class BackupRuleService : IBackupRuleService
 
     public async Task<List<BackupRule>> GetAllRules()
     {
-        return await _context.BackupRules.ToListAsync();
+        return await _context.BackupRules
+            .AsNoTracking()
+            .ToListAsync();
     }
 
     public async Task<BackupRule> GetRuleByIdAsync(int id)
     {
         return await _context.BackupRules
+            .AsNoTracking()
             .FirstOrDefaultAsync(r => r.Id == id);
     }
 
     public async Task<BackupRule> CreateRuleAsync(BackupRule rule)
     {
-        rule.CreatedAt = DateTime.Now;
-        rule.UpdatedAt = DateTime.Now;
+        var now = DateTime.UtcNow;
+        rule.CreatedAt = now;
+        rule.UpdatedAt = now;
         _context.BackupRules.Add(rule);
         await _context.SaveChangesAsync();
         _logger.LogInformation("备份规则已创建：{RuleId} {RuleName}", rule.Id, rule.Name);
@@ -40,7 +44,7 @@ public class BackupRuleService : IBackupRuleService
 
     public async Task<BackupRule> UpdateRuleAsync(int id, BackupRule updatedRule)
     {
-        var existingRule = await GetRuleByIdAsync(id);
+        var existingRule = await _context.BackupRules.FindAsync(id);
         if (existingRule == null)
             return null;
 
@@ -53,7 +57,9 @@ public class BackupRuleService : IBackupRuleService
         existingRule.KeepWeeklyCount = updatedRule.KeepWeeklyCount;
         existingRule.KeepMonthly = updatedRule.KeepMonthly;
         existingRule.KeepMonthlyCount = updatedRule.KeepMonthlyCount;
-        existingRule.UpdatedAt = DateTime.Now;
+        existingRule.KeepYearly = updatedRule.KeepYearly;
+        existingRule.KeepYearlyCount = updatedRule.KeepYearlyCount;
+        existingRule.UpdatedAt = DateTime.UtcNow;
 
         await _context.SaveChangesAsync();
         _logger.LogInformation("备份规则已更新：{RuleId} {RuleName}", existingRule.Id, existingRule.Name);
@@ -62,7 +68,7 @@ public class BackupRuleService : IBackupRuleService
 
     public async Task<bool> DeleteRuleAsync(int id)
     {
-        var rule = await GetRuleByIdAsync(id);
+        var rule = await _context.BackupRules.FindAsync(id);
         if (rule == null) return false;
 
         _context.BackupRules.Remove(rule);

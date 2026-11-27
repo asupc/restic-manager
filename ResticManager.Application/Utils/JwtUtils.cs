@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Tokens;
 using ResticManager.Models;
 using System.IdentityModel.Tokens.Jwt;
@@ -19,7 +19,7 @@ public class JwtUtils
     public string GenerateToken(User user)
     {
         var tokenHandler = new JwtSecurityTokenHandler();
-        var key = Encoding.ASCII.GetBytes(_configuration["Jwt:Secret"]!);
+        var key = Encoding.UTF8.GetBytes(_configuration["Jwt:Secret"]!);
 
         var tokenDescriptor = new SecurityTokenDescriptor
         {
@@ -28,10 +28,10 @@ public class JwtUtils
                 new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()),
                 new Claim(ClaimTypes.Name, user.Username)
             }),
-            Expires = DateTime.Now.AddDays(7),
+            Expires = DateTime.UtcNow.AddDays(7),
             SigningCredentials = new SigningCredentials(
                 new SymmetricSecurityKey(key),
-                SecurityAlgorithms.HmacSha256Signature)
+                SecurityAlgorithms.HmacSha256)
         };
 
         var token = tokenHandler.CreateToken(tokenDescriptor);
@@ -40,15 +40,15 @@ public class JwtUtils
 
     public int? ValidateToken(string token)
     {
-        if (token == null)
+        if (string.IsNullOrWhiteSpace(token))
             return null;
 
         var tokenHandler = new JwtSecurityTokenHandler();
-        var key = Encoding.ASCII.GetBytes(_configuration["Jwt:Secret"]!);
+        var key = Encoding.UTF8.GetBytes(_configuration["Jwt:Secret"]!);
 
         try
         {
-            tokenHandler.ValidateToken(token, new TokenValidationParameters
+            var principal = tokenHandler.ValidateToken(token, new TokenValidationParameters
             {
                 ValidateIssuerSigningKey = true,
                 IssuerSigningKey = new SymmetricSecurityKey(key),
@@ -57,10 +57,16 @@ public class JwtUtils
                 ClockSkew = TimeSpan.Zero
             }, out var validatedToken);
 
-            var jwtToken = (JwtSecurityToken)validatedToken;
-            var userId = int.Parse(jwtToken.Claims.FirstOrDefault().Value);
+            if (validatedToken is not JwtSecurityToken jwtToken ||
+                !string.Equals(jwtToken.Header.Alg, SecurityAlgorithms.HmacSha256, StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
 
-            return userId;
+            var userIdClaim = principal.FindFirst(ClaimTypes.NameIdentifier)?.Value
+                ?? jwtToken.Claims.FirstOrDefault(c => c.Type == ClaimTypes.NameIdentifier || c.Type == JwtRegisteredClaimNames.NameId)?.Value;
+
+            return int.TryParse(userIdClaim, out var userId) ? userId : null;
         }
         catch
         {

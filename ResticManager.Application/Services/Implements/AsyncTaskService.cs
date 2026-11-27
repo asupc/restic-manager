@@ -1,4 +1,7 @@
+using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -39,7 +42,13 @@ public class AsyncTaskService : IAsyncTaskService, IHostedService
     private readonly ILogger<AsyncTaskService> _logger;
 
     /// <summary>全局并发闸：避免多个仓库的任务同时打满网盘带宽/连接数</summary>
-    private static readonly SemaphoreSlim GlobalGate = new(3, 3);
+    private readonly SemaphoreSlim _globalGate = new(3, 3);
+
+    /// <summary>保护 CreateTaskAsync 查重 + 落库原子区，消除并发提交防重入竞态</summary>
+    private readonly SemaphoreSlim _createLock = new(1, 1);
+
+    private readonly CancellationTokenSource _shutdownCts = new();
+    private readonly ConcurrentDictionary<int, Task> _inFlightTasks = new();
 
     public AsyncTaskService(IServiceScopeFactory scopeFactory,
         IRepositoryLockManager repositoryLockManager,
@@ -52,46 +61,63 @@ public class AsyncTaskService : IAsyncTaskService, IHostedService
 
     public async Task<int> CreateTaskAsync(string type, int? repositoryId, string title, object parameters, string targetKey = "", string trigger = "Manual")
     {
-        using var scope = _scopeFactory.CreateScope();
-        var context = scope.ServiceProvider.GetRequiredService<ResticManagerDbContext>();
+        var normalizedTargetKey = NormalizeTargetKey(targetKey);
+        var normalizedTitle = NormalizeTitle(title);
 
-        // 防重入：同 (Type, RepositoryId, TargetKey) 已有在途任务时拒绝。
-        // RepositoryUnlock 是解除死锁的工具，用户可能正被某个卡死任务挡住，不做拒绝。
-        if (type != AsyncTaskTypes.RepositoryUnlock)
+        AsyncTask entity;
+        await _createLock.WaitAsync();
+        try
         {
-            var duplicated = await context.AsyncTasks.AnyAsync(t =>
-                t.Type == type &&
-                t.RepositoryId == repositoryId &&
-                t.TargetKey == (targetKey ?? "") &&
-                (t.Status == StatusPending || t.Status == StatusRunning));
-            if (duplicated)
-                throw new InvalidOperationException("该操作已有同类任务正在进行中，请稍后再试");
+            using var scope = _scopeFactory.CreateScope();
+            var context = scope.ServiceProvider.GetRequiredService<ResticManagerDbContext>();
+
+            // 防重入：同 (Type, RepositoryId, TargetKey) 已有在途任务时拒绝。
+            // RepositoryUnlock 是解除死锁的工具，用户可能正被某个卡死任务挡住，不做拒绝。
+            if (type != AsyncTaskTypes.RepositoryUnlock)
+            {
+                var duplicated = await context.AsyncTasks.AnyAsync(t =>
+                    t.Type == type &&
+                    t.RepositoryId == repositoryId &&
+                    t.TargetKey == normalizedTargetKey &&
+                    (t.Status == StatusPending || t.Status == StatusRunning));
+                if (duplicated)
+                    throw new InvalidOperationException("该操作已有同类任务正在进行中，请稍后再试");
+            }
+
+            // BackupRun 额外预检备份任务的状态位，把"Quartz 定时正在执行"的冲突拦截在提交时刻
+            if (type == AsyncTaskTypes.BackupRun && int.TryParse(targetKey, out var backupTaskId))
+            {
+                var running = await context.BackupTasks.AnyAsync(t => t.Id == backupTaskId && t.LastRunStatus == "Running");
+                if (running)
+                    throw new InvalidOperationException("任务正在运行中，无法再次启动");
+            }
+
+            entity = new AsyncTask
+            {
+                Type = type,
+                RepositoryId = repositoryId,
+                Title = normalizedTitle,
+                TargetKey = normalizedTargetKey,
+                ParametersJson = JsonSerializer.Serialize(parameters, JsonOptions),
+                Status = StatusPending,
+                Trigger = trigger,
+                CreatedAt = DateTime.UtcNow
+            };
+            context.AsyncTasks.Add(entity);
+            await context.SaveChangesAsync();
         }
-
-        // BackupRun 额外预检备份任务的状态位，把"Quartz 定时正在执行"的冲突拦截在提交时刻
-        if (type == AsyncTaskTypes.BackupRun && int.TryParse(targetKey, out var backupTaskId))
+        finally
         {
-            var running = await context.BackupTasks.AnyAsync(t => t.Id == backupTaskId && t.LastRunStatus == "Running");
-            if (running)
-                throw new InvalidOperationException("任务正在运行中，无法再次启动");
+            _createLock.Release();
         }
-
-        var entity = new AsyncTask
-        {
-            Type = type,
-            RepositoryId = repositoryId,
-            Title = title,
-            TargetKey = targetKey ?? "",
-            ParametersJson = JsonSerializer.Serialize(parameters, JsonOptions),
-            Status = StatusPending,
-            Trigger = trigger,
-            CreatedAt = DateTime.UtcNow
-        };
-        context.AsyncTasks.Add(entity);
-        await context.SaveChangesAsync();
 
         // 后台执行；RunAsync 内部全量捕获异常，不会产生未观察异常
-        _ = Task.Run(() => RunAsync(entity.Id));
+        var runTask = Task.Run(() => RunAsync(entity.Id, _shutdownCts.Token));
+        _inFlightTasks[entity.Id] = runTask;
+        _ = runTask.ContinueWith(
+            _ => _inFlightTasks.TryRemove(entity.Id, out _),
+            TaskScheduler.Default);
+
         return entity.Id;
     }
 
@@ -99,7 +125,9 @@ public class AsyncTaskService : IAsyncTaskService, IHostedService
     {
         using var scope = _scopeFactory.CreateScope();
         var context = scope.ServiceProvider.GetRequiredService<ResticManagerDbContext>();
-        return await context.AsyncTasks.FirstOrDefaultAsync(t => t.Id == id);
+        return await context.AsyncTasks
+            .AsNoTracking()
+            .FirstOrDefaultAsync(t => t.Id == id);
     }
 
     public async Task<List<AsyncTask>> GetActiveTasksAsync()
@@ -107,8 +135,25 @@ public class AsyncTaskService : IAsyncTaskService, IHostedService
         using var scope = _scopeFactory.CreateScope();
         var context = scope.ServiceProvider.GetRequiredService<ResticManagerDbContext>();
         return await context.AsyncTasks
+            .AsNoTracking()
             .Where(t => t.Status == StatusPending || t.Status == StatusRunning)
             .OrderBy(t => t.CreatedAt)
+            .Select(t => new AsyncTask
+            {
+                Id = t.Id,
+                Type = t.Type,
+                RepositoryId = t.RepositoryId,
+                Title = t.Title,
+                TargetKey = t.TargetKey,
+                ParametersJson = t.ParametersJson,
+                Status = t.Status,
+                Error = t.Error,
+                Trigger = t.Trigger,
+                StartTime = t.StartTime,
+                EndTime = t.EndTime,
+                DurationMs = t.DurationMs,
+                CreatedAt = t.CreatedAt
+            })
             .ToListAsync();
     }
 
@@ -118,9 +163,26 @@ public class AsyncTaskService : IAsyncTaskService, IHostedService
         var context = scope.ServiceProvider.GetRequiredService<ResticManagerDbContext>();
         var threshold = DateTime.UtcNow.AddMinutes(-withinMinutes);
         return await context.AsyncTasks
+            .AsNoTracking()
             .Where(t => t.EndTime != null && t.EndTime >= threshold)
             .OrderByDescending(t => t.EndTime)
             .Take(20)
+            .Select(t => new AsyncTask
+            {
+                Id = t.Id,
+                Type = t.Type,
+                RepositoryId = t.RepositoryId,
+                Title = t.Title,
+                TargetKey = t.TargetKey,
+                ParametersJson = t.ParametersJson,
+                Status = t.Status,
+                Error = t.Error,
+                Trigger = t.Trigger,
+                StartTime = t.StartTime,
+                EndTime = t.EndTime,
+                DurationMs = t.DurationMs,
+                CreatedAt = t.CreatedAt
+            })
             .ToListAsync();
     }
 
@@ -129,7 +191,44 @@ public class AsyncTaskService : IAsyncTaskService, IHostedService
         return CleanUpOnStartupAsync(cancellationToken);
     }
 
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+    public async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await _shutdownCts.CancelAsync();
+
+        var activeTasks = _inFlightTasks.Values.ToArray();
+        if (activeTasks.Length == 0)
+            return;
+
+        try
+        {
+            await Task.WhenAll(activeTasks).WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
+        }
+        catch (TimeoutException)
+        {
+            _logger.LogWarning("应用关闭等待后台任务超时，仍有 {Count} 个任务未结束", _inFlightTasks.Count);
+        }
+        catch (OperationCanceledException)
+        {
+            _logger.LogWarning("应用关闭等待后台任务被取消，仍有 {Count} 个任务未结束", _inFlightTasks.Count);
+        }
+    }
+
+    private static string NormalizeTargetKey(string? targetKey)
+    {
+        var key = targetKey ?? string.Empty;
+        if (key.Length <= 100)
+            return key;
+
+        var hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(key))).ToLowerInvariant();
+        return $"{key[..35]}:{hash}";
+    }
+
+    private static string NormalizeTitle(string? title)
+    {
+        if (string.IsNullOrEmpty(title))
+            return string.Empty;
+        return title.Length <= 200 ? title : title[..200];
+    }
 
     /// <summary>
     /// 启动清理：把上次进程退出遗留的 Pending/Running 任务标记为失败，复位备份任务侧
@@ -142,6 +241,7 @@ public class AsyncTaskService : IAsyncTaskService, IHostedService
         {
             using var scope = _scopeFactory.CreateScope();
             var context = scope.ServiceProvider.GetRequiredService<ResticManagerDbContext>();
+            var now = DateTime.UtcNow;
 
             // 进程没了 restic 子进程也随之中断，遗留的在途任务统一标失败
             var stale = await context.AsyncTasks
@@ -151,7 +251,7 @@ public class AsyncTaskService : IAsyncTaskService, IHostedService
             {
                 t.Status = StatusFailed;
                 t.Error = "应用重启导致任务中断";
-                t.EndTime = DateTime.UtcNow;
+                t.EndTime = now;
             }
             if (stale.Count > 0)
                 await context.SaveChangesAsync(ct);
@@ -169,14 +269,14 @@ public class AsyncTaskService : IAsyncTaskService, IHostedService
             foreach (var r in runningRecords)
             {
                 r.Status = StatusFailed;
-                r.EndTime = DateTime.Now;
+                r.EndTime = now;
                 r.Error = "应用重启中断";
             }
             if (runningTasks.Count > 0 || runningRecords.Count > 0)
                 await context.SaveChangesAsync(ct);
 
             // 临时类任务（文件树/搜索/diff）结果只被当次页面消费，清理 1 天前的已完成记录
-            var cutoff = DateTime.UtcNow.AddDays(-1);
+            var cutoff = now.AddDays(-1);
             await context.AsyncTasks
                 .Where(t => AsyncTaskTypes.EphemeralTypes.Contains(t.Type)
                             && (t.Status == StatusSucceeded || t.Status == StatusFailed)
@@ -213,6 +313,9 @@ public class AsyncTaskService : IAsyncTaskService, IHostedService
     {
         foreach (var repositoryId in repositoryIds)
         {
+            if (_shutdownCts.IsCancellationRequested)
+                break;
+
             try
             {
                 using var scope = _scopeFactory.CreateScope();
@@ -231,7 +334,7 @@ public class AsyncTaskService : IAsyncTaskService, IHostedService
     /// 后台执行单个任务：排队（全局闸）→ 置 Running → 取仓库锁 → 执行 → 落结果。
     /// 任何异常都只落到任务行上，绝不外抛。
     /// </summary>
-    private async Task RunAsync(int taskId)
+    private async Task RunAsync(int taskId, CancellationToken cancellationToken)
     {
         try
         {
@@ -239,18 +342,20 @@ public class AsyncTaskService : IAsyncTaskService, IHostedService
             using (var scope = _scopeFactory.CreateScope())
             {
                 var context = scope.ServiceProvider.GetRequiredService<ResticManagerDbContext>();
-                task = await context.AsyncTasks.FirstOrDefaultAsync(t => t.Id == taskId);
+                task = await context.AsyncTasks
+                    .AsNoTracking()
+                    .FirstOrDefaultAsync(t => t.Id == taskId, cancellationToken);
             }
             if (task == null)
                 return;
 
             // 先取全局并发闸再翻转状态：排队中的任务保持 Pending，前端可区分"排队中/执行中"
-            await GlobalGate.WaitAsync();
+            await _globalGate.WaitAsync(cancellationToken);
             try
             {
                 await SetStatusRunningAsync(taskId);
 
-                var repoLockHandle = await TryAcquireRepoLockAsync(task);
+                var repoLockHandle = await TryAcquireRepoLockAsync(task, cancellationToken);
                 try
                 {
                     var stopwatch = Stopwatch.StartNew();
@@ -276,7 +381,19 @@ public class AsyncTaskService : IAsyncTaskService, IHostedService
             }
             finally
             {
-                GlobalGate.Release();
+                _globalGate.Release();
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning("后台任务 {TaskId} 因应用关闭被取消", taskId);
+            try
+            {
+                await MarkFinishedAsync(taskId, StatusFailed, "应用关闭导致任务取消", null, null);
+            }
+            catch (Exception markEx)
+            {
+                _logger.LogError(markEx, "后台任务 {TaskId} 取消状态落库失败", taskId);
             }
         }
         catch (Exception ex)
@@ -301,13 +418,13 @@ public class AsyncTaskService : IAsyncTaskService, IHostedService
     ///   服务层才能同时覆盖两条路径），此处再取会造成信号量重入死锁；
     /// - 无仓库关联的任务无需仓库锁。
     /// </summary>
-    private async Task<IAsyncDisposable?> TryAcquireRepoLockAsync(AsyncTask task)
+    private async Task<IAsyncDisposable?> TryAcquireRepoLockAsync(AsyncTask task, CancellationToken cancellationToken)
     {
         if (task.RepositoryId == null || task.Type == AsyncTaskTypes.RepositoryUnlock)
             return null;
         if (task.Type == AsyncTaskTypes.BackupRun || task.Type == AsyncTaskTypes.RepositoryCheck)
             return null;
-        return await _repositoryLockManager.AcquireAsync(task.RepositoryId.Value);
+        return await _repositoryLockManager.AcquireAsync(task.RepositoryId.Value, cancellationToken);
     }
 
     /// <summary>
@@ -320,7 +437,11 @@ public class AsyncTaskService : IAsyncTaskService, IHostedService
         using var scope = _scopeFactory.CreateScope();
         var repositoryService = scope.ServiceProvider.GetRequiredService<IRepositoryService>();
         var snapshotService = scope.ServiceProvider.GetRequiredService<ISnapshotService>();
-        var repositoryId = task.RepositoryId!.Value;
+
+        if (!task.RepositoryId.HasValue)
+            throw new InvalidOperationException($"任务 {task.Id}（{task.Type}）缺少关联的仓库 ID");
+
+        var repositoryId = task.RepositoryId.Value;
 
         switch (task.Type)
         {

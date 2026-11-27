@@ -8,6 +8,7 @@ using Quartz.Spi;
 using ResticManager.Application.Jobs;
 using ResticManager.Application.Services.Abstractions;
 using ResticManager.Models;
+using System.Collections.Concurrent;
 using System.Collections.Specialized;
 
 namespace ResticManager.Application.Services.Implements;
@@ -17,7 +18,8 @@ public class QuartzSchedulerService : IHostedService
     private readonly IServiceProvider _serviceProvider;
     private readonly IConfiguration _configuration;
     private readonly ILogger<QuartzSchedulerService> _logger;
-    private IScheduler _scheduler;
+    private readonly SemaphoreSlim _initLock = new(1, 1);
+    private volatile IScheduler _scheduler;
 
     public QuartzSchedulerService(IServiceProvider serviceProvider, IConfiguration configuration, ILogger<QuartzSchedulerService> logger)
     {
@@ -28,21 +30,34 @@ public class QuartzSchedulerService : IHostedService
 
     private async Task InitScheduler()
     {
-        // 只有当调度器尚未初始化时才创建
+        // 双检锁：避免并发调用导致重复初始化调度器
         if (_scheduler != null)
             return;
 
-        // 创建调度器工厂和调度器
-        NameValueCollection props = new()
+        await _initLock.WaitAsync();
+        try
         {
-            {"quartz.serializer.type", "binary"}
-        };
-        StdSchedulerFactory factory = new(props);
+            if (_scheduler != null)
+                return;
 
-        _scheduler = await factory.GetScheduler();
+            // 创建调度器工厂和调度器
+            NameValueCollection props = new()
+            {
+                {"quartz.serializer.type", "binary"}
+            };
+            StdSchedulerFactory factory = new(props);
 
-        // 设置自定义的 JobFactory 以支持依赖注入
-        _scheduler.JobFactory = new ServiceJobFactory(_serviceProvider);
+            var scheduler = await factory.GetScheduler();
+
+            // 设置自定义的 JobFactory 以支持依赖注入
+            scheduler.JobFactory = new ServiceJobFactory(_serviceProvider);
+
+            _scheduler = scheduler;
+        }
+        finally
+        {
+            _initLock.Release();
+        }
     }
 
     public async Task StartAsync(CancellationToken cancellationToken)
@@ -112,7 +127,7 @@ public class QuartzSchedulerService : IHostedService
             _logger.LogWarning("无效的 Cron 表达式：{Cron}（任务 {TaskName}）", task.CronExpression, task.Name);
             return;
         }
-        
+
         // 创建任务
         var jobKey = new JobKey($"BackupTaskJob_{task.Id}");
         var jobDetail = JobBuilder.Create<BackupTaskJob>()
@@ -297,6 +312,7 @@ public class QuartzSchedulerService : IHostedService
 public class ServiceJobFactory : IJobFactory
 {
     private readonly IServiceProvider _serviceProvider;
+    private readonly ConcurrentDictionary<IJob, IServiceScope> _scopes = new(ReferenceEqualityComparer.Instance);
 
     public ServiceJobFactory(IServiceProvider serviceProvider)
     {
@@ -305,11 +321,29 @@ public class ServiceJobFactory : IJobFactory
 
     public IJob NewJob(TriggerFiredBundle bundle, IScheduler scheduler)
     {
-        return (IJob)_serviceProvider.GetRequiredService(bundle.JobDetail.JobType);
+        var scope = _serviceProvider.CreateScope();
+        try
+        {
+            var job = (IJob)scope.ServiceProvider.GetRequiredService(bundle.JobDetail.JobType);
+            _scopes[job] = scope;
+            return job;
+        }
+        catch
+        {
+            scope.Dispose();
+            throw;
+        }
     }
 
     public void ReturnJob(IJob job)
     {
-        // 不需要特殊处理
+        if (job != null && _scopes.TryRemove(job, out var scope))
+        {
+            scope.Dispose();
+        }
+        else if (job is IDisposable disposable)
+        {
+            disposable.Dispose();
+        }
     }
 }

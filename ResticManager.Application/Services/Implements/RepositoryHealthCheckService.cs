@@ -32,7 +32,9 @@ public class RepositoryHealthCheckService : IRepositoryHealthCheckService
 
     public async Task<RepositoryCheckRecord> CheckRepositoryAsync(int repositoryId, string trigger = "Manual")
     {
-        var repository = await _context.Repositories.FindAsync(repositoryId);
+        var repository = await _context.Repositories
+            .AsNoTracking()
+            .FirstOrDefaultAsync(r => r.Id == repositoryId);
         if (repository == null)
             throw new Exception($"仓库 ID {repositoryId} 不存在");
 
@@ -78,6 +80,7 @@ public class RepositoryHealthCheckService : IRepositoryHealthCheckService
     public async Task<List<RepositoryCheckRecord>> CheckAllRepositoriesAsync(string trigger = "Scheduled")
     {
         var repositoryIds = await _context.Repositories
+            .AsNoTracking()
             .Where(r => r.IsInitialized)
             .Select(r => r.Id)
             .ToListAsync();
@@ -101,7 +104,10 @@ public class RepositoryHealthCheckService : IRepositoryHealthCheckService
 
     public async Task<List<RepositoryCheckRecord>> GetRecordsByRepositoryAsync(int repositoryId, int limit = 20)
     {
+        limit = Math.Clamp(limit, 1, 100);
+
         return await _context.RepositoryCheckRecords
+            .AsNoTracking()
             .Where(r => r.RepositoryId == repositoryId)
             .OrderByDescending(r => r.CheckedAt)
             .Take(limit)
@@ -111,6 +117,7 @@ public class RepositoryHealthCheckService : IRepositoryHealthCheckService
     public async Task<RepositoryCheckRecord?> GetLatestByRepositoryAsync(int repositoryId)
     {
         return await _context.RepositoryCheckRecords
+            .AsNoTracking()
             .Where(r => r.RepositoryId == repositoryId)
             .OrderByDescending(r => r.CheckedAt)
             .FirstOrDefaultAsync();
@@ -121,6 +128,7 @@ public class RepositoryHealthCheckService : IRepositoryHealthCheckService
         var overview = new RepositoryHealthOverview();
 
         var repositories = await _context.Repositories
+            .AsNoTracking()
             .Select(r => new { r.Id, r.Name, r.IsInitialized })
             .ToListAsync();
 
@@ -135,6 +143,7 @@ public class RepositoryHealthCheckService : IRepositoryHealthCheckService
         // 取每个已初始化仓库的最新一条检查记录
         var initializedIds = repositories.Where(r => r.IsInitialized).Select(r => r.Id).ToList();
         var latestByRepo = await _context.RepositoryCheckRecords
+            .AsNoTracking()
             .Where(r => initializedIds.Contains(r.RepositoryId))
             .GroupBy(r => r.RepositoryId)
             .Select(g => new

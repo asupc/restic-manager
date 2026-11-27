@@ -15,17 +15,18 @@ public sealed class RepositoryLockManager : IRepositoryLockManager
 {
     private readonly ConcurrentDictionary<int, SemaphoreSlim> _locks = new();
 
-    public async Task<IAsyncDisposable> AcquireAsync(int repositoryId)
+    public async Task<IAsyncDisposable> AcquireAsync(int repositoryId, CancellationToken cancellationToken = default)
     {
         var semaphore = _locks.GetOrAdd(repositoryId, _ => new SemaphoreSlim(1, 1));
-        await semaphore.WaitAsync();
+        await semaphore.WaitAsync(cancellationToken);
         return new Releaser(semaphore);
     }
 
-    /// <summary>释放时归还信号量的句柄</summary>
+    /// <summary>释放时归还信号量的句柄（幂等释放）</summary>
     private sealed class Releaser : IAsyncDisposable
     {
         private readonly SemaphoreSlim _semaphore;
+        private int _disposed;
 
         public Releaser(SemaphoreSlim semaphore)
         {
@@ -34,7 +35,10 @@ public sealed class RepositoryLockManager : IRepositoryLockManager
 
         public ValueTask DisposeAsync()
         {
-            _semaphore.Release();
+            if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            {
+                _semaphore.Release();
+            }
             return ValueTask.CompletedTask;
         }
     }

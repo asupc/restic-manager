@@ -5,6 +5,7 @@ using ResticManager.Application.Services.Abstractions;
 
 namespace ResticManager.Application.Jobs
 {
+    [DisallowConcurrentExecution]
     public class BackupTaskJob : IJob
     {
         private readonly IServiceProvider _serviceProvider;
