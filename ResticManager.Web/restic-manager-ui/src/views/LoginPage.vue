@@ -1,83 +1,120 @@
 <template>
   <div class="auth-page">
-    <!-- 左侧品牌区 -->
+    <!-- 左侧精致品牌展示区 -->
     <div class="auth-brand">
-      <div class="auth-brand__logo">
-        <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-          <rect x="2" y="6" width="28" height="22" rx="5" fill="#fff"/>
-          <path d="M9 16l4 4 10-10" stroke="#0e7490" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/>
-        </svg>
-      </div>
-      <h1 class="auth-brand__title">ResticManager</h1>
-      <p class="auth-brand__sub">智能备份管家 · 数据安全的最后一公里</p>
+      <div class="auth-brand__grid"></div>
+      <div class="auth-brand__glow auth-brand__glow--primary"></div>
+      <div class="auth-brand__glow auth-brand__glow--secondary"></div>
 
-      <ul class="auth-features">
-        <li>
-          <span class="auth-features__icon"><i class="el-icon-time"></i></span>
-          <div>
-            <div class="auth-features__title">自动化定时备份</div>
-            <div class="auth-features__desc">Cron 表达式灵活配置,告别手工备份</div>
-          </div>
-        </li>
-        <li>
-          <span class="auth-features__icon"><i class="el-icon-lock"></i></span>
-          <div>
-            <div class="auth-features__title">端到端加密</div>
-            <div class="auth-features__desc">基于 restic 的工业级加密方案</div>
-          </div>
-        </li>
-        <li>
-          <span class="auth-features__icon"><i class="el-icon-view"></i></span>
-          <div>
-            <div class="auth-features__title">可视化快照对比</div>
-            <div class="auth-features__desc">逐文件查看变更,按需恢复到任意版本</div>
-          </div>
-        </li>
-        <li>
-          <span class="auth-features__icon"><i class="el-icon-folder"></i></span>
-          <div>
-            <div class="auth-features__title">多仓库统一管理</div>
-            <div class="auth-features__desc">本地、SFTP、S3 等多种后端并存</div>
-          </div>
-        </li>
-      </ul>
+      <div class="auth-brand__content">
+        <div class="auth-brand__badge">
+          <span class="auth-brand__badge-dot"></span>
+          <span>Restic Backup Orchestrator</span>
+        </div>
 
-      <div class="auth-brand__deco">
-        <svg viewBox="0 0 400 400" xmlns="http://www.w3.org/2000/svg">
-          <circle cx="80" cy="320" r="120" fill="rgba(255,255,255,0.05)"/>
-          <circle cx="320" cy="80" r="160" fill="rgba(255,255,255,0.04)"/>
-          <circle cx="350" cy="280" r="80" fill="rgba(255,255,255,0.06)"/>
-        </svg>
+        <div class="auth-brand__header">
+          <div class="auth-brand__logo">
+            <svg viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <rect x="2" y="6" width="32" height="24" rx="7" fill="currentColor" fill-opacity="0.16" stroke="currentColor" stroke-width="2"/>
+              <path d="M11 18.5l4.5 4.5 10-10.5" stroke="currentColor" stroke-width="2.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div>
+            <h1 class="auth-brand__title">ResticManager</h1>
+            <p class="auth-brand__sub">现代智能备份控制台 · 守护每一份关键数据</p>
+          </div>
+        </div>
+
+        <div class="auth-feature-grid">
+          <div class="auth-feature-card">
+            <span class="auth-feature-card__icon"><i class="el-icon-lock"></i></span>
+            <div class="auth-feature-card__body">
+              <div class="auth-feature-card__title">端到端加密</div>
+              <div class="auth-feature-card__desc">AES-256 + Poly1305 工业级加密，数据离开本机前即完成保护</div>
+            </div>
+          </div>
+
+          <div class="auth-feature-card">
+            <span class="auth-feature-card__icon"><i class="el-icon-cpu"></i></span>
+            <div class="auth-feature-card__body">
+              <div class="auth-feature-card__title">增量去重</div>
+              <div class="auth-feature-card__desc">基于内容寻址的块级去重，大幅压缩存储占用与传输带宽</div>
+            </div>
+          </div>
+
+          <div class="auth-feature-card">
+            <span class="auth-feature-card__icon"><i class="el-icon-cloudy"></i></span>
+            <div class="auth-feature-card__body">
+              <div class="auth-feature-card__title">多云后端</div>
+              <div class="auth-feature-card__desc">统一管理本地目录、SFTP、REST、S3、B2 与 rclone 网盘</div>
+            </div>
+          </div>
+
+          <div class="auth-feature-card">
+            <span class="auth-feature-card__icon"><i class="el-icon-time"></i></span>
+            <div class="auth-feature-card__body">
+              <div class="auth-feature-card__title">自动化调度</div>
+              <div class="auth-feature-card__desc">灵活 Cron 定时备份、自动清理校验与历史快照一键恢复</div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 
-    <!-- 右侧表单 -->
+    <!-- 右侧居中玻璃态表单卡片 -->
     <div class="auth-form">
       <div class="auth-card">
+        <div class="auth-card__eyebrow">安全身份验证</div>
         <h2 class="auth-card__title">欢迎回来</h2>
-        <p class="auth-card__sub">登录以管理你的备份任务</p>
+        <p class="auth-card__sub">登录控制台以管理你的仓库、快照与定时任务</p>
 
-        <el-form ref="loginForm" :model="loginForm" :rules="loginRules" size="default" @submit.native.prevent="handleLogin">
+        <el-form
+          ref="loginForm"
+          :model="loginForm"
+          :rules="loginRules"
+          size="default"
+          @submit.native.prevent="handleLogin"
+        >
           <el-form-item prop="username">
-            <el-input v-model="loginForm.username" placeholder="用户名" prefix-icon="el-icon-user"></el-input>
+            <el-input
+              v-model="loginForm.username"
+              placeholder="请输入用户名"
+              prefix-icon="el-icon-user"
+              autocomplete="username"
+            ></el-input>
           </el-form-item>
           <el-form-item prop="password">
-            <el-input v-model="loginForm.password" type="password" placeholder="密码" prefix-icon="el-icon-lock" show-password></el-input>
+            <el-input
+              v-model="loginForm.password"
+              type="password"
+              placeholder="请输入密码"
+              prefix-icon="el-icon-lock"
+              show-password
+              autocomplete="current-password"
+            ></el-input>
           </el-form-item>
-          <el-form-item>
+          <el-form-item class="auth-form__options">
             <div class="auth-form__row">
-              <el-checkbox v-model="loginForm.rememberMe">记住我</el-checkbox>
-              <el-button v-if="!hasUser" type="text" @click="$router.push('/register')" class="text-brand">注册账号</el-button>
+              <el-checkbox v-model="loginForm.rememberMe">记住用户名</el-checkbox>
+              <el-button v-if="!hasUser" type="text" @click="$router.push('/register')" class="text-brand">
+                注册初始账号
+              </el-button>
             </div>
           </el-form-item>
-          <el-button type="primary" :loading="isLoading" @click="handleLogin" class="auth-card__submit" round>
+          <el-button
+            type="primary"
+            native-type="submit"
+            :loading="isLoading"
+            @click="handleLogin"
+            class="auth-card__submit"
+          >
             登 录
           </el-button>
         </el-form>
 
         <div class="auth-card__footer">
           <i class="el-icon-lock"></i>
-          所有数据均加密传输 · 我们不会保存你的密码
+          <span>凭据仅用于鉴权 · 本地绝不保存明文密码</span>
         </div>
       </div>
     </div>
@@ -151,136 +188,295 @@ export default {
   display: flex;
   min-height: 100vh;
   background: var(--color-bg-page);
+  background-image: var(--ambient-glow);
 }
 
-/* 品牌区 */
+/* 左侧品牌展示区 */
 .auth-brand {
-  flex: 1.1;
-  background: var(--brand-600);
-  padding: 60px;
-  color: #fff;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
+  flex: 1.15;
   position: relative;
   overflow: hidden;
-}
-.auth-brand__logo {
-  width: 56px;
-  height: 56px;
-  margin-bottom: 24px;
-}
-.auth-brand__logo svg { width: 100%; height: 100%; }
-.auth-brand__title {
-  font-size: 36px;
-  font-weight: 700;
-  margin: 0;
-  letter-spacing: -0.02em;
-}
-.auth-brand__sub {
-  font-size: 16px;
-  opacity: 0.85;
-  margin-top: 8px;
-  margin-bottom: 48px;
-}
-
-.auth-features {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  position: relative;
-  z-index: 1;
-}
-.auth-features li {
-  display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  padding: 14px 0;
-}
-.auth-features__icon {
-  width: 38px;
-  height: 38px;
-  border-radius: 10px;
-  background: rgba(255, 255, 255, 0.18);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 18px;
-  flex-shrink: 0;
-}
-.auth-features__title {
-  font-weight: 600;
-  font-size: 15px;
-}
-.auth-features__desc {
-  font-size: 13px;
-  opacity: 0.75;
-  margin-top: 2px;
+  padding: 56px 52px;
+  color: var(--color-text-on-brand);
+  background: linear-gradient(145deg, var(--brand-900) 0%, var(--brand-800) 52%, var(--brand-700) 100%);
+  border-right: 1px solid var(--color-border);
 }
 
-.auth-brand__deco {
+.auth-brand__grid {
   position: absolute;
   inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+  background-size: 36px 36px;
+  mask-image: radial-gradient(ellipse at 35% 40%, rgba(0, 0, 0, 0.9), transparent 78%);
   pointer-events: none;
 }
-.auth-brand__deco svg { width: 100%; height: 100%; }
 
-/* 表单区 */
+.auth-brand__glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(72px);
+  pointer-events: none;
+}
+
+.auth-brand__glow--primary {
+  width: 360px;
+  height: 360px;
+  top: -80px;
+  left: -60px;
+  background: var(--brand-500);
+  opacity: 0.28;
+}
+
+.auth-brand__glow--secondary {
+  width: 300px;
+  height: 300px;
+  bottom: -90px;
+  right: -40px;
+  background: var(--info-500);
+  opacity: 0.22;
+}
+
+.auth-brand__content {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  max-width: 540px;
+}
+
+.auth-brand__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 12px;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  font-size: var(--font-xs);
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  margin-bottom: 24px;
+}
+
+.auth-brand__badge-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--success-500);
+  box-shadow: 0 0 8px var(--success-500);
+}
+
+.auth-brand__header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 36px;
+}
+
+.auth-brand__logo {
+  width: 54px;
+  height: 54px;
+  flex-shrink: 0;
+  color: var(--color-text-on-brand);
+}
+
+.auth-brand__logo svg {
+  width: 100%;
+  height: 100%;
+}
+
+.auth-brand__title {
+  margin: 0;
+  font-size: var(--font-4xl);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.15;
+}
+
+.auth-brand__sub {
+  margin: 6px 0 0;
+  font-size: var(--font-md);
+  opacity: 0.85;
+}
+
+/* 核心特性卡片网格 */
+.auth-feature-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.auth-feature-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(10px);
+  transition: transform var(--transition-fast), background-color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.auth-feature-card:hover {
+  transform: translateY(-2px);
+  background: rgba(255, 255, 255, 0.14);
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.auth-feature-card__icon {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-md);
+  background: rgba(255, 255, 255, 0.16);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.auth-feature-card__body {
+  min-width: 0;
+}
+
+.auth-feature-card__title {
+  font-size: var(--font-base);
+  font-weight: 600;
+  line-height: 1.3;
+}
+
+.auth-feature-card__desc {
+  margin-top: 4px;
+  font-size: var(--font-xs);
+  line-height: 1.5;
+  opacity: 0.82;
+}
+
+/* 右侧玻璃态表单卡片 */
 .auth-form {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 40px;
+  padding: 40px 32px;
 }
+
 .auth-card {
   width: 100%;
-  max-width: 400px;
+  max-width: 420px;
+  padding: 36px 34px 30px;
+  border-radius: var(--radius-xl);
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border-strong);
+  box-shadow: var(--shadow-xl);
+  backdrop-filter: blur(16px);
 }
+
+.auth-card__eyebrow {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--brand-400);
+  margin-bottom: 8px;
+}
+
 .auth-card__title {
-  font-size: 28px;
+  margin: 0;
+  font-size: var(--font-3xl);
   font-weight: 700;
   color: var(--color-text-primary);
-  margin: 0;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.02em;
 }
+
 .auth-card__sub {
-  font-size: 14px;
-  color: var(--color-text-secondary);
   margin: 8px 0 28px;
+  font-size: var(--font-sm);
+  color: var(--color-text-secondary);
 }
-.auth-card .el-form-item { margin-bottom: 18px; }
-.auth-card .el-input__inner { height: 42px; }
-.auth-card .el-input__inner:focus { border-color: var(--brand-500); }
-.auth-card .el-button--primary {
-  background: var(--brand-600);
-  border: none;
+
+.auth-card >>> .el-form-item {
+  margin-bottom: 18px;
 }
-.auth-card__submit {
-  width: 100%;
+
+.auth-card >>> .el-input__inner {
   height: 44px;
-  font-size: 15px;
-  font-weight: 600;
-  margin-top: 8px;
+  line-height: 44px;
+  border-radius: var(--radius-md);
 }
+
+.auth-card >>> .el-input__prefix,
+.auth-card >>> .el-input__suffix {
+  display: flex;
+  align-items: center;
+}
+
+.auth-form__options {
+  margin-bottom: 14px;
+}
+
 .auth-form__row {
   display: flex;
   justify-content: space-between;
   align-items: center;
 }
+
+.auth-card__submit {
+  width: 100%;
+  height: 44px;
+  font-size: var(--font-md);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  margin-top: 4px;
+  box-shadow: var(--shadow-brand);
+}
+
 .auth-card__footer {
   margin-top: 24px;
-  text-align: center;
-  font-size: 12px;
-  color: var(--color-text-placeholder);
+  padding-top: 16px;
+  border-top: 1px solid var(--color-border-soft);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: var(--font-xs);
+  color: var(--color-text-secondary);
 }
-.auth-card__footer i { margin-right: 4px; }
+
+.auth-card__footer i {
+  color: var(--brand-400);
+}
 
 @media (max-width: 960px) {
-  .auth-page { flex-direction: column; }
-  .auth-brand { padding: 40px 30px; }
-  .auth-brand__title { font-size: 28px; }
-  .auth-form { padding: 30px 20px; }
-  .auth-features { display: none; }
+  .auth-page {
+    flex-direction: column;
+  }
+  .auth-brand {
+    flex: none;
+    padding: 36px 24px 28px;
+    border-right: none;
+    border-bottom: 1px solid var(--color-border);
+  }
+  .auth-brand__header {
+    margin-bottom: 0;
+  }
+  .auth-brand__title {
+    font-size: var(--font-2xl);
+  }
+  .auth-feature-grid {
+    display: none;
+  }
+  .auth-form {
+    padding: 28px 18px 40px;
+  }
+  .auth-card {
+    padding: 28px 22px 24px;
+  }
 }
 </style>

@@ -4,222 +4,291 @@
     <div class="page-header">
       <div>
         <h2 class="page-header__title">备份任务</h2>
-        <div class="page-header__subtitle">管理所有自动 / 手动备份任务及其执行计划</div>
+        <div class="page-header__subtitle">管理所有自动与手动备份任务、调度计划及历史执行记录</div>
       </div>
       <div class="page-header__actions">
         <el-button round :loading="loading" icon="el-icon-refresh" size="small" @click="refresh">刷新</el-button>
-        <el-button type="primary" round icon="el-icon-plus" size="small" @click="openCreateDialog">新增任务</el-button>
+        <el-button type="primary" round icon="el-icon-plus" size="small" @click="openCreateDialog">新建任务</el-button>
       </div>
     </div>
 
-    <!-- 概览统计 -->
-    <el-row :gutter="16" class="mb-4">
-      <el-col :xs="12" :sm="6">
-        <div class="mini-stat mini-stat--brand">
-          <div class="mini-stat__label">任务总数</div>
-          <div class="mini-stat__value">{{ tasks.length }}</div>
+    <!-- 顶部紧凑统计条 -->
+    <div class="rm-kpi-grid tasks-kpi-grid">
+      <div class="rm-kpi-card rm-kpi-card--brand">
+        <div class="rm-kpi-card__label">
+          <span>总任务数</span>
+          <i class="el-icon-tickets kpi-icon kpi-icon--brand"></i>
         </div>
-      </el-col>
-      <el-col :xs="12" :sm="6">
-        <div class="mini-stat mini-stat--success">
-          <div class="mini-stat__label">已启用</div>
-          <div class="mini-stat__value">{{ enabledCount }}</div>
+        <div class="rm-kpi-card__value">{{ tasks.length }}</div>
+        <div class="rm-kpi-card__meta">其中 {{ scheduledCount }} 个配置了定时计划</div>
+      </div>
+      <div class="rm-kpi-card rm-kpi-card--success">
+        <div class="rm-kpi-card__label">
+          <span>已启用</span>
+          <i class="el-icon-circle-check kpi-icon kpi-icon--success"></i>
         </div>
-      </el-col>
-      <el-col :xs="12" :sm="6">
-        <div class="mini-stat mini-stat--warning">
-          <div class="mini-stat__label">有计划</div>
-          <div class="mini-stat__value">{{ scheduledCount }}</div>
+        <div class="rm-kpi-card__value">{{ enabledCount }}</div>
+        <div class="rm-kpi-card__meta">{{ tasks.length - enabledCount }} 个已暂停</div>
+      </div>
+      <div class="rm-kpi-card rm-kpi-card--info">
+        <div class="rm-kpi-card__label">
+          <span>运行中</span>
+          <i class="el-icon-loading kpi-icon kpi-icon--info"></i>
         </div>
-      </el-col>
-      <el-col :xs="12" :sm="6">
-        <div class="mini-stat mini-stat--danger">
-          <div class="mini-stat__label">上次失败</div>
-          <div class="mini-stat__value">{{ lastFailedCount }}</div>
+        <div class="rm-kpi-card__value">{{ runningCount }}</div>
+        <div class="rm-kpi-card__meta">{{ runningCount > 0 ? '后台正在执行备份' : '当前无执行中任务' }}</div>
+      </div>
+      <div class="rm-kpi-card rm-kpi-card--danger">
+        <div class="rm-kpi-card__label">
+          <span>最近失败</span>
+          <i class="el-icon-warning-outline kpi-icon kpi-icon--danger"></i>
         </div>
-      </el-col>
-    </el-row>
+        <div class="rm-kpi-card__value">{{ lastFailedCount }}</div>
+        <div class="rm-kpi-card__meta">{{ lastFailedCount > 0 ? '建议检查失败日志' : '无最近失败记录' }}</div>
+      </div>
+    </div>
 
-    <!-- 筛选条 -->
-    <el-card class="filter-bar mb-4" shadow="never">
-      <div class="filter-bar__row">
+    <!-- 统一筛选工具条 -->
+    <div class="rm-toolbar">
+      <div class="rm-toolbar__group">
         <el-input
           v-model="filters.name"
-          placeholder="按任务名称搜索..."
+          placeholder="搜索任务名称或源路径..."
           prefix-icon="el-icon-search"
           clearable
           size="small"
-          class="filter-bar__search"
+          class="toolbar-search"
           @input="handleFilterChange"
         />
-        <el-select v-model="filters.repositoryId" placeholder="选择仓库" clearable size="small" @change="handleFilterChange" class="filter-bar__select">
+        <el-select
+          v-model="filters.state"
+          placeholder="任务状态"
+          clearable
+          size="small"
+          class="toolbar-select"
+          @change="handleFilterChange"
+        >
+          <el-option label="全部状态" value=""></el-option>
+          <el-option label="已启用" value="enabled"></el-option>
+          <el-option label="已暂停" value="disabled"></el-option>
+          <el-option label="运行中" value="running"></el-option>
+          <el-option label="上次失败" value="failed"></el-option>
+        </el-select>
+        <el-select
+          v-model="filters.repositoryId"
+          placeholder="目标仓库"
+          clearable
+          size="small"
+          class="toolbar-select"
+          @change="handleFilterChange"
+        >
           <el-option label="全部仓库" :value="0"></el-option>
           <el-option v-for="repo in repositories" :key="repo.id" :label="repo.name" :value="repo.id"></el-option>
         </el-select>
-        <el-select v-model="filters.ruleId" placeholder="选择规则" clearable size="small" @change="handleFilterChange" class="filter-bar__select">
+        <el-select
+          v-model="filters.ruleId"
+          placeholder="备份规则"
+          clearable
+          size="small"
+          class="toolbar-select"
+          @change="handleFilterChange"
+        >
           <el-option label="全部规则" :value="0"></el-option>
           <el-option v-for="r in backupRules" :key="r.id" :label="r.name" :value="r.id"></el-option>
         </el-select>
-        <el-select v-model="filters.status" placeholder="状态" clearable size="small" @change="handleFilterChange" class="filter-bar__select">
-          <el-option label="全部" value=""></el-option>
-          <el-option label="已启用" value="enabled"></el-option>
-          <el-option label="已禁用" value="disabled"></el-option>
-        </el-select>
-        <el-select v-model="filters.lastStatus" placeholder="上次结果" clearable size="small" @change="handleFilterChange" class="filter-bar__select">
-          <el-option label="全部" value=""></el-option>
-          <el-option label="成功" value="Succeeded"></el-option>
-          <el-option label="失败" value="Failed"></el-option>
-          <el-option label="从未执行" value="NeverRun"></el-option>
-        </el-select>
+        <el-button
+          v-if="filterActiveCount > 0"
+          size="small"
+          plain
+          icon="el-icon-refresh-left"
+          @click="resetFilters"
+        >重置</el-button>
       </div>
-      <div v-if="filterActiveCount > 0" class="filter-bar__chips">
-        <span class="text-secondary" style="font-size:12px; margin-right:4px;">已筛选:</span>
-        <el-tag
-          v-for="chip in activeChips"
-          :key="chip.key"
-          closable
-          size="mini"
-          @close="clearFilter(chip.key)"
-          effect="plain"
-        >
-          {{ chip.label }}
-        </el-tag>
-        <el-button type="text" size="mini" @click="resetFilters">清除全部</el-button>
+      <div class="rm-toolbar__group">
+        <span class="toolbar-summary text-mono">
+          显示 {{ filteredTasks.length }} / {{ tasks.length }} 个任务
+        </span>
       </div>
-    </el-card>
+    </div>
 
     <!-- 任务列表 -->
-    <el-card shadow="never">
+    <div class="rm-surface" v-loading="loading">
       <div v-if="!loading && filteredTasks.length === 0" class="empty">
+        <div class="empty__icon"><i class="el-icon-tickets"></i></div>
         <div class="empty__title">{{ filterActiveCount > 0 ? '没有符合条件的任务' : '还没有任何备份任务' }}</div>
-        <div class="empty__desc">{{ filterActiveCount > 0 ? '试试调整筛选条件,或创建新任务' : '创建第一个备份任务开始保护你的数据' }}</div>
-        <el-button type="primary" round icon="el-icon-plus" @click="openCreateDialog" class="mt-3">
-          {{ filterActiveCount > 0 ? '创建新任务' : '创建第一个任务' }}
-        </el-button>
+        <div class="empty__desc">{{ filterActiveCount > 0 ? '试试调整筛选条件，或创建新任务' : '创建第一个备份任务开始保护你的数据' }}</div>
+        <div class="empty__actions">
+          <el-button v-if="filterActiveCount > 0" size="small" plain @click="resetFilters">清空筛选</el-button>
+          <el-button type="primary" size="small" round icon="el-icon-plus" @click="openCreateDialog">
+            {{ filterActiveCount > 0 ? '新建任务' : '创建第一个任务' }}
+          </el-button>
+        </div>
       </div>
 
-      <el-table v-else :data="filteredTasks" v-loading="loading" stripe style="width:100%">
-        <el-table-column label="任务" min-width="220">
+      <el-table v-else :data="filteredTasks" stripe style="width: 100%">
+        <el-table-column label="任务名称与源路径" min-width="250">
           <template #default="scope">
             <div class="task-row">
-              <div class="task-row__icon">
-                <i class="el-icon-tickets"></i>
+              <div class="task-row__icon" :class="taskIconClass(scope.row)">
+                <i :class="isTaskRunning(scope.row) ? 'el-icon-loading' : 'el-icon-tickets'"></i>
               </div>
               <div class="task-row__body">
-                <div class="task-row__name">{{ scope.row.name }}</div>
-                <div class="task-row__meta">
-                  <span class="rm-badge" :class="scope.row.isEnabled ? 'rm-badge--success' : 'rm-badge--neutral'">
-                    {{ scope.row.isEnabled ? '已启用' : '已禁用' }}
-                  </span>
-                  <span class="rm-badge" :class="`rm-badge--${getStatusTone(scope.row.lastRunStatus)}`">
-                    {{ getStatusText(scope.row.lastRunStatus) }}
+                <div class="task-row__name" :title="scope.row.name">{{ scope.row.name }}</div>
+                <div class="task-row__path">
+                  <span class="rm-code-chip" :title="scope.row.sourcePath">
+                    <span class="rm-code-chip__text">{{ truncatePath(scope.row.sourcePath) }}</span>
                   </span>
                 </div>
               </div>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="源路径" min-width="200">
+
+        <el-table-column label="仓库与规则" min-width="160">
           <template #default="scope">
-            <div class="path-cell" :title="scope.row.sourcePath">
-              <i class="el-icon-document path-cell__icon"></i>
-              <span>{{ truncatePath(scope.row.sourcePath) }}</span>
+            <div class="repo-rule-cell">
+              <div class="repo-rule-cell__repo">
+                <i class="el-icon-box"></i>
+                <span>{{ getRepositoryName(scope.row.repositoryId) }}</span>
+              </div>
+              <div class="repo-rule-cell__rule">
+                <i class="el-icon-collection-tag"></i>
+                <span v-if="getBackupRuleName(scope.row.backupRuleId)">{{ getBackupRuleName(scope.row.backupRuleId) }}</span>
+                <span v-else class="text-muted">未绑定规则</span>
+              </div>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="仓库" min-width="120">
+
+        <el-table-column label="调度计划" min-width="190">
           <template #default="scope">
-            <span class="text-bold">{{ getRepositoryName(scope.row.repositoryId) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="规则" min-width="120">
-          <template #default="scope">
-            <span v-if="getBackupRuleName(scope.row.backupRuleId)" class="text-secondary">
-              <i class="el-icon-collection-tag"></i> {{ getBackupRuleName(scope.row.backupRuleId) }}
+            <div v-if="scope.row.cronExpression" class="cron-cell">
+              <div class="cron-cell__human">{{ describeCron(scope.row.cronExpression) }}</div>
+              <span class="rm-code-chip cron-cell__expr">{{ scope.row.cronExpression }}</span>
+            </div>
+            <span v-else class="rm-status-pill rm-status-pill--neutral">
+              <span class="rm-status-pill__dot"></span>
+              手动触发
             </span>
-            <span v-else class="text-muted">未设置</span>
           </template>
         </el-table-column>
-        <el-table-column label="计划" width="140">
+
+        <el-table-column label="状态" width="148">
           <template #default="scope">
-            <code v-if="scope.row.cronExpression" class="cron-pill">{{ scope.row.cronExpression }}</code>
-            <span v-else class="text-muted">手动</span>
+            <div class="status-cell">
+              <span class="rm-status-pill" :class="getTaskStatusPillClass(scope.row)">
+                <span class="rm-status-pill__dot"></span>
+                {{ getTaskStatusLabel(scope.row) }}
+              </span>
+              <span v-if="!scope.row.isEnabled" class="paused-hint">定时已暂停</span>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column label="上次运行" width="170">
+
+        <el-table-column label="上次运行" width="166">
           <template #default="scope">
-            <div v-if="scope.row.lastRunAt" class="text-mono" style="font-size:12px;">
+            <div v-if="scope.row.lastRunAt" class="text-mono text-secondary" style="font-size: 12px;">
               {{ formatDate(scope.row.lastRunAt) }}
             </div>
-            <span v-else class="text-muted">从未</span>
+            <span v-else class="text-muted">从未执行</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="160" fixed="right" align="right">
+
+        <el-table-column label="操作" width="290" fixed="right" align="right">
           <template #default="scope">
             <div class="row-actions">
-              <el-button size="mini" type="text" :loading="activeRunIds.includes(scope.row.id)" icon="el-icon-video-play" @click="runTask(scope.row)">运行</el-button>
-              <el-dropdown trigger="click" size="medium" class="row-more" @command="(c) => handleRowCmd(c, scope.row)">
-                <el-button size="mini" type="text" icon="el-icon-more"></el-button>
-                <el-dropdown-menu slot="dropdown">
-                  <el-dropdown-item icon="el-icon-document" command="records">查看记录</el-dropdown-item>
-                  <el-dropdown-item icon="el-icon-folder" command="browse">浏览文件</el-dropdown-item>
-                  <el-dropdown-item icon="el-icon-edit" command="edit">编辑任务</el-dropdown-item>
-                  <el-dropdown-item icon="el-icon-delete" command="delete" divided>删除任务</el-dropdown-item>
-                </el-dropdown-menu>
-              </el-dropdown>
+              <el-button
+                size="mini"
+                type="primary"
+                plain
+                :loading="isTaskRunning(scope.row)"
+                icon="el-icon-video-play"
+                @click="runTask(scope.row)"
+              >立即运行</el-button>
+              <el-button size="mini" type="text" icon="el-icon-document" @click="viewRecords(scope.row)">历史</el-button>
+              <el-button size="mini" type="text" icon="el-icon-folder-opened" @click="browseFiles(scope.row)">预览</el-button>
+              <el-button size="mini" type="text" icon="el-icon-edit" @click="openEditDialog(scope.row)">编辑</el-button>
+              <el-button size="mini" type="text" class="text-danger" icon="el-icon-delete" @click="deleteTask(scope.row)">删除</el-button>
             </div>
           </template>
         </el-table-column>
       </el-table>
-    </el-card>
+    </div>
 
     <!-- 任务编辑对话框 -->
-    <el-dialog :title="editingTask ? '编辑备份任务' : '新建备份任务'" :visible.sync="dialogVisible" width="640px" :close-on-click-modal="false" append-to-body>
+    <el-dialog
+      :title="editingTask ? '编辑备份任务' : '新建备份任务'"
+      :visible.sync="dialogVisible"
+      width="680px"
+      :close-on-click-modal="false"
+      append-to-body
+    >
       <el-form :model="form" :rules="rules" ref="formRef" label-position="top">
-        <el-row :gutter="16">
-          <el-col :span="12">
-            <el-form-item label="任务名称" prop="name">
-              <el-input v-model="form.name" placeholder="为任务起一个易记的名字" size="default"></el-input>
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="目标仓库" prop="repositoryId">
-              <el-select v-model="form.repositoryId" placeholder="选择目标仓库" class="w-100" size="default">
-                <el-option v-for="repo in repositories" :key="repo.id" :label="repo.name" :value="repo.id"></el-option>
-              </el-select>
-            </el-form-item>
-          </el-col>
-        </el-row>
-
-        <el-form-item label="源路径" prop="sourcePath">
-          <folder-selector v-model="form.sourcePath" title="选择源路径" placeholder="选择或输入要备份的目录"></folder-selector>
-        </el-form-item>
-
-        <el-row :gutter="16">
-          <el-col :span="12">
-            <el-form-item label="备份规则">
-              <el-select v-model="form.backupRuleId" placeholder="选择备份规则" clearable class="w-100" size="default">
-                <el-option v-for="rule in backupRules" :key="rule.id" :label="rule.name" :value="rule.id"></el-option>
-              </el-select>
-              <div class="form-tip"><i class="el-icon-info"></i> 应用于该任务的备份规则 (可选)</div>
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="启用任务">
-              <el-switch v-model="form.isEnabled" active-text="启用" inactive-text="停用"></el-switch>
-            </el-form-item>
-          </el-col>
-        </el-row>
-
-        <el-form-item label="计划 (Cron)">
-          <el-input v-model="form.cronExpression" placeholder="例如: 0 0 0 * * ? (每天凌晨执行)" size="default"></el-input>
-          <div class="form-tip">
-            <i class="el-icon-info"></i> 使用 6 段 Quartz Cron 表达式设置自动备份,留空表示手动执行。常用:
-            <el-tag size="mini" effect="plain" class="cron-quick" @click="form.cronExpression = '0 0 0 * * ?'">每天 0 点</el-tag>
-            <el-tag size="mini" effect="plain" class="cron-quick" @click="form.cronExpression = '0 0 */6 * * ?'">每 6 小时</el-tag>
-            <el-tag size="mini" effect="plain" class="cron-quick" @click="form.cronExpression = '0 0 0 ? * SUN'">每周日</el-tag>
+        <!-- 分区 1：基础信息 -->
+        <div class="form-section">
+          <div class="form-section__title">
+            <i class="el-icon-tickets"></i> 基础信息
           </div>
-        </el-form-item>
+          <el-row :gutter="16">
+            <el-col :span="12">
+              <el-form-item label="任务名称" prop="name">
+                <el-input v-model="form.name" placeholder="为任务起一个易记的名字"></el-input>
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="目标仓库" prop="repositoryId">
+                <el-select v-model="form.repositoryId" placeholder="选择目标仓库" class="w-100">
+                  <el-option v-for="repo in repositories" :key="repo.id" :label="repo.name" :value="repo.id"></el-option>
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-form-item label="启用状态" class="mb-0">
+            <el-switch v-model="form.isEnabled" active-text="启用自动调度" inactive-text="暂停调度"></el-switch>
+          </el-form-item>
+        </div>
+
+        <!-- 分区 2：备份路径与规则 -->
+        <div class="form-section">
+          <div class="form-section__title">
+            <i class="el-icon-folder-opened"></i> 备份路径与规则
+          </div>
+          <el-form-item label="源路径" prop="sourcePath">
+            <folder-selector v-model="form.sourcePath" title="选择源路径" placeholder="选择或输入要备份的目录"></folder-selector>
+          </el-form-item>
+          <el-form-item label="备份规则（可选）" class="mb-0">
+            <el-select v-model="form.backupRuleId" placeholder="不绑定规则（备份全部文件）" clearable class="w-100">
+              <el-option v-for="rule in backupRules" :key="rule.id" :label="rule.name" :value="rule.id"></el-option>
+            </el-select>
+            <div class="form-tip"><i class="el-icon-info"></i> 绑定规则后，将自动应用对应的包含/排除模式与快照保留策略</div>
+          </el-form-item>
+        </div>
+
+        <!-- 分区 3：定时计划 -->
+        <div class="form-section form-section--last">
+          <div class="form-section__title">
+            <i class="el-icon-time"></i> 定时计划（6 段 Quartz Cron）
+          </div>
+          <el-form-item label="Cron 表达式" class="mb-0">
+            <el-input
+              v-model="form.cronExpression"
+              placeholder="例如: 0 0 0 * * ?（留空表示仅手动执行）"
+              class="text-mono"
+            ></el-input>
+            <div v-if="form.cronExpression && form.cronExpression.trim()" class="cron-preview">
+              <i class="el-icon-alarm-clock"></i>
+              解析预览：<strong>{{ describeCron(form.cronExpression) }}</strong>
+            </div>
+            <div class="cron-presets">
+              <span class="cron-presets__label">常用快捷：</span>
+              <button type="button" class="cron-preset-btn" @click="form.cronExpression = '0 0 0 * * ?'">每天 00:00</button>
+              <button type="button" class="cron-preset-btn" @click="form.cronExpression = '0 0 2 * * ?'">每天 02:00</button>
+              <button type="button" class="cron-preset-btn" @click="form.cronExpression = '0 0 */6 * * ?'">每 6 小时</button>
+              <button type="button" class="cron-preset-btn" @click="form.cronExpression = '0 0 0 ? * SUN'">每周日 00:00</button>
+              <button type="button" class="cron-preset-btn" @click="form.cronExpression = ''">清空（手动）</button>
+            </div>
+          </el-form-item>
+        </div>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -230,7 +299,7 @@
     <!-- 备份记录抽屉 -->
     <el-drawer :title="`${currentTaskName} · 备份记录`" :visible.sync="drawerVisible" direction="rtl" size="640px" append-to-body>
       <div class="drawer-header-toolbar">
-        <span class="text-secondary" style="font-size:12px;">共 {{ drawerTotal }} 条记录</span>
+        <span class="text-secondary text-mono" style="font-size: 12px;">共 {{ drawerTotal }} 条记录</span>
         <el-button size="mini" type="text" icon="el-icon-top-right" @click="$router.push(`/records?taskId=${currentTaskId}`)">
           在完整列表查看
         </el-button>
@@ -238,12 +307,12 @@
       <div class="drawer-content" v-loading="drawerLoading">
         <div v-if="drawerRecords.length === 0 && !drawerLoading" class="empty empty--small">
           <div class="empty__title">该任务暂无执行记录</div>
-          <div class="empty__desc">点击"运行"按钮执行一次备份</div>
+          <div class="empty__desc">点击「立即运行」按钮即可触发一次备份</div>
         </div>
         <div v-for="record in drawerRecords" :key="record.id" class="record-item" :class="{ 'record-item--failed': record.status === 'Failed' }">
           <div class="record-header">
-            <span class="rm-badge" :class="`rm-badge--${getStatusTone(record.status)}`">
-              <span class="rm-badge__dot"></span>
+            <span class="rm-status-pill" :class="getRecordPillClass(record.status)">
+              <span class="rm-status-pill__dot"></span>
               {{ getStatusText(record.status) }}
             </span>
             <span class="record-time text-mono">{{ formatDate(record.startTime) }}</span>
@@ -256,23 +325,23 @@
               </div>
               <div class="detail-item">
                 <span class="detail-label">处理文件</span>
-                <span class="text-bold">{{ record.filesProcessed || 0 }}</span>
+                <span class="text-bold text-mono">{{ record.filesProcessed || 0 }}</span>
               </div>
               <div class="detail-item">
                 <span class="detail-label">传输数据</span>
-                <span>{{ formatBytes(record.dataTransferred) }}</span>
+                <span class="text-mono">{{ formatBytes(record.dataTransferred) }}</span>
               </div>
               <div class="detail-item" v-if="record.summary">
                 <span class="detail-label">新增文件</span>
-                <span class="text-success text-bold">{{ record.summary.files_new || 0 }}</span>
+                <span class="text-success text-bold text-mono">{{ record.summary.files_new || 0 }}</span>
               </div>
               <div class="detail-item" v-if="record.summary">
                 <span class="detail-label">修改文件</span>
-                <span class="text-warning text-bold">{{ record.summary.files_changed || 0 }}</span>
+                <span class="text-warning text-bold text-mono">{{ record.summary.files_changed || 0 }}</span>
               </div>
               <div class="detail-item" v-if="record.summary">
                 <span class="detail-label">未变文件</span>
-                <span class="text-secondary">{{ record.summary.files_unmodified || 0 }}</span>
+                <span class="text-secondary text-mono">{{ record.summary.files_unmodified || 0 }}</span>
               </div>
             </div>
             <div v-if="record.error" class="error-section">
@@ -301,11 +370,21 @@
     </el-drawer>
 
     <!-- 文件浏览抽屉 -->
-    <el-drawer :title="`${currentTaskName} · 文件结构`" :visible.sync="fileDrawerVisible" direction="rtl" size="800px" append-to-body>
+    <el-drawer :title="`${currentTaskName} · 文件结构预览`" :visible.sync="fileDrawerVisible" direction="rtl" size="800px" append-to-body>
       <div class="drawer-content">
-        <el-alert v-if="currentExcludePatterns" :title="'排除规则: ' + currentExcludePatterns" type="info" show-icon :closable="false" style="margin-bottom: 12px;"></el-alert>
+        <el-alert v-if="currentExcludePatterns" :title="'当前排除规则: ' + currentExcludePatterns" type="info" show-icon :closable="false" style="margin-bottom: 12px;"></el-alert>
         <div class="file-browser" v-loading="fileTreeLoading">
-          <el-tree v-if="fileDrawerVisible && fileTreeReady" ref="fileTree" :key="currentTaskId + ':' + fileTreeVersion" :props="fileTreeProps" :load="loadTreeNode" lazy node-key="path" :expand-on-click-node="false" :highlight-current="true">
+          <el-tree
+            v-if="fileDrawerVisible && fileTreeReady"
+            ref="fileTree"
+            :key="currentTaskId + ':' + fileTreeVersion"
+            :props="fileTreeProps"
+            :load="loadTreeNode"
+            lazy
+            node-key="path"
+            :expand-on-click-node="false"
+            :highlight-current="true"
+          >
             <span class="custom-tree-node" slot-scope="{ node, data }">
               <span :class="{ 'excluded-file': data.isExcluded }">
                 <i :class="data.icon"></i> {{ node.label }}
@@ -320,8 +399,13 @@
     </el-drawer>
 
     <!-- 日志弹窗 -->
-    <el-dialog title="备份日志" :visible.sync="logDialogVisible" width="640px" append-to-body>
-      <pre class="log-content">{{ currentLog }}</pre>
+    <el-dialog title="备份日志" :visible.sync="logDialogVisible" width="720px" append-to-body>
+      <div class="rm-terminal">
+        <div class="rm-terminal__header">
+          <span><i class="el-icon-tickets"></i> restic output</span>
+        </div>
+        <div class="rm-terminal__body">{{ currentLog || '（无输出内容）' }}</div>
+      </div>
       <template #footer>
         <el-button @click="logDialogVisible = false">关闭</el-button>
       </template>
@@ -336,6 +420,23 @@ import { backupRecordService } from '@/services/backup-record.service';
 import { backupRuleService } from '@/services/backup-rule.service';
 import { repositoryService } from '@/services/repository.service';
 import FolderSelector from '@/components/FolderSelector.vue';
+
+const WEEKDAY_MAP = {
+  SUN: '周日',
+  MON: '周一',
+  TUE: '周二',
+  WED: '周三',
+  THU: '周四',
+  FRI: '周五',
+  SAT: '周六',
+  '1': '周日',
+  '2': '周一',
+  '3': '周二',
+  '4': '周三',
+  '5': '周四',
+  '6': '周五',
+  '7': '周六'
+};
 
 export default {
   name: 'BackupTasks',
@@ -370,10 +471,9 @@ export default {
       },
       filters: {
         name: '',
+        state: '',
         repositoryId: 0,
-        ruleId: 0,
-        status: '',
-        lastStatus: ''
+        ruleId: 0
       },
       rules: {
         name: [{ required: true, message: '请输入任务名称', trigger: 'blur' }],
@@ -397,51 +497,66 @@ export default {
     };
   },
   computed: {
-    filteredTasks() {
-      let r = this.tasks;
-      if (this.filters.name) {
-        const q = this.filters.name.toLowerCase();
-        r = r.filter(t => t.name.toLowerCase().includes(q));
-      }
-      if (this.filters.repositoryId) r = r.filter(t => t.repositoryId === this.filters.repositoryId);
-      if (this.filters.ruleId) r = r.filter(t => t.backupRuleId === this.filters.ruleId);
-      if (this.filters.status) {
-        const enabled = this.filters.status === 'enabled';
-        r = r.filter(t => t.isEnabled === enabled);
-      }
-      if (this.filters.lastStatus) r = r.filter(t => t.lastRunStatus === this.filters.lastStatus);
-      return r;
+    repoMap() {
+      const map = new Map();
+      this.repositories.forEach(r => map.set(r.id, r));
+      return map;
+    },
+    ruleMap() {
+      const map = new Map();
+      this.backupRules.forEach(r => map.set(r.id, r));
+      return map;
+    },
+    // 正在后台执行备份的任务 ID 集合（来自全局任务轮询，驱动"运行"按钮的 loading）
+    activeRunIds() {
+      return this.$store.getters['tasks/activeBackupRunTargetKeys'].map(Number);
+    },
+    runningCount() {
+      return this.tasks.filter(t => this.isTaskRunning(t)).length;
     },
     enabledCount() {
       return this.tasks.filter(t => t.isEnabled).length;
     },
     scheduledCount() {
-      return this.tasks.filter(t => t.cronExpression).length;
+      return this.tasks.filter(t => t.cronExpression && String(t.cronExpression).trim()).length;
     },
     lastFailedCount() {
       return this.tasks.filter(t => t.lastRunStatus === 'Failed').length;
     },
+    filteredTasks() {
+      let r = this.tasks;
+      const kw = (this.filters.name || '').trim().toLowerCase();
+      if (kw) {
+        r = r.filter(t => {
+          const name = (t.name || '').toLowerCase();
+          const path = (t.sourcePath || '').toLowerCase();
+          return name.includes(kw) || path.includes(kw);
+        });
+      }
+      if (this.filters.repositoryId) {
+        r = r.filter(t => t.repositoryId === this.filters.repositoryId);
+      }
+      if (this.filters.ruleId) {
+        r = r.filter(t => t.backupRuleId === this.filters.ruleId);
+      }
+      if (this.filters.state === 'enabled') {
+        r = r.filter(t => !!t.isEnabled);
+      } else if (this.filters.state === 'disabled') {
+        r = r.filter(t => !t.isEnabled);
+      } else if (this.filters.state === 'running') {
+        r = r.filter(t => this.isTaskRunning(t));
+      } else if (this.filters.state === 'failed') {
+        r = r.filter(t => t.lastRunStatus === 'Failed');
+      }
+      return r;
+    },
     filterActiveCount() {
       let n = 0;
-      if (this.filters.name) n++;
+      if (this.filters.name && this.filters.name.trim()) n++;
+      if (this.filters.state) n++;
       if (this.filters.repositoryId) n++;
       if (this.filters.ruleId) n++;
-      if (this.filters.status) n++;
-      if (this.filters.lastStatus) n++;
       return n;
-    },
-    activeChips() {
-      const chips = [];
-      if (this.filters.name) chips.push({ key: 'name', label: `名称: ${this.filters.name}` });
-      if (this.filters.repositoryId) chips.push({ key: 'repositoryId', label: `仓库: ${this.getRepositoryName(this.filters.repositoryId)}` });
-      if (this.filters.ruleId) chips.push({ key: 'ruleId', label: `规则: ${this.getBackupRuleName(this.filters.ruleId)}` });
-      if (this.filters.status) chips.push({ key: 'status', label: this.filters.status === 'enabled' ? '已启用' : '已禁用' });
-      if (this.filters.lastStatus) chips.push({ key: 'lastStatus', label: `上次: ${this.filters.lastStatus}` });
-      return chips;
-    },
-    // 正在后台执行备份的任务 ID 集合（来自全局任务轮询，驱动"运行"按钮的 loading）
-    activeRunIds() {
-      return this.$store.getters['tasks/activeBackupRunTargetKeys'].map(Number);
     }
   },
   watch: {
@@ -462,6 +577,78 @@ export default {
     }
   },
   methods: {
+    isTaskRunning(task) {
+      return this.activeRunIds.includes(task.id) || task.lastRunStatus === 'Running';
+    },
+    taskIconClass(task) {
+      if (this.isTaskRunning(task)) return 'task-row__icon--running';
+      if (task.lastRunStatus === 'Failed') return 'task-row__icon--danger';
+      if (!task.isEnabled) return 'task-row__icon--neutral';
+      if (task.lastRunStatus === 'Succeeded') return 'task-row__icon--success';
+      return 'task-row__icon--brand';
+    },
+    getTaskStatusPillClass(task) {
+      if (this.isTaskRunning(task)) return 'rm-status-pill--running';
+      if (task.lastRunStatus === 'Failed') return 'rm-status-pill--danger';
+      if (task.lastRunStatus === 'Succeeded') return task.isEnabled ? 'rm-status-pill--success' : 'rm-status-pill--neutral';
+      if (!task.isEnabled) return 'rm-status-pill--neutral';
+      return 'rm-status-pill--info';
+    },
+    getTaskStatusLabel(task) {
+      if (this.isTaskRunning(task)) return '运行中';
+      if (task.lastRunStatus === 'Failed') return '上次失败';
+      if (task.lastRunStatus === 'Succeeded') return task.isEnabled ? '正常' : '已暂停';
+      if (!task.isEnabled) return '已暂停';
+      return '待执行';
+    },
+    getRecordPillClass(status) {
+      if (status === 'Running') return 'rm-status-pill--running';
+      if (status === 'Succeeded') return 'rm-status-pill--success';
+      if (status === 'Failed') return 'rm-status-pill--danger';
+      if (status === 'Pending') return 'rm-status-pill--info';
+      return 'rm-status-pill--neutral';
+    },
+    describeCron(expr) {
+      if (!expr || !String(expr).trim()) return '手动触发';
+      const parts = String(expr).trim().split(/\s+/);
+      if (parts.length < 6) return '自定义计划';
+      const sec = parts[0];
+      const min = parts[1];
+      const hour = parts[2];
+      const dom = parts[3];
+      const month = parts[4];
+      const dow = parts[5];
+
+      const pad2 = v => String(v).padStart(2, '0');
+      const isNum = v => /^\d+$/.test(v);
+
+      // 每 N 分钟
+      if (sec === '0' && /^\*\/(\d+)$/.test(min) && hour === '*' && (dom === '*' || dom === '?') && month === '*') {
+        return `每 ${min.slice(2)} 分钟`;
+      }
+      // 每 N 小时
+      if (sec === '0' && isNum(min) && /^\*\/(\d+)$/.test(hour) && (dom === '*' || dom === '?') && month === '*') {
+        return min === '0' ? `每 ${hour.slice(2)} 小时` : `每 ${hour.slice(2)} 小时第 ${min} 分`;
+      }
+      // 每小时
+      if (sec === '0' && isNum(min) && hour === '*' && (dom === '*' || dom === '?') && month === '*') {
+        return min === '0' ? '每小时整点' : `每小时第 ${min} 分`;
+      }
+      // 每天 HH:mm
+      if (sec === '0' && isNum(min) && isNum(hour) && dom === '*' && month === '*' && (dow === '?' || dow === '*')) {
+        return `每天 ${pad2(hour)}:${pad2(min)}`;
+      }
+      // 每周某天 HH:mm
+      if (sec === '0' && isNum(min) && isNum(hour) && (dom === '?' || dom === '*') && month === '*' && dow !== '?' && dow !== '*') {
+        const dayText = dow.split(',').map(d => WEEKDAY_MAP[d.toUpperCase()] || d).join('、');
+        return `每${dayText} ${pad2(hour)}:${pad2(min)}`;
+      }
+      // 每月 N 日 HH:mm
+      if (sec === '0' && isNum(min) && isNum(hour) && isNum(dom) && month === '*' && (dow === '?' || dow === '*')) {
+        return `每月 ${dom} 日 ${pad2(hour)}:${pad2(min)}`;
+      }
+      return '自定义定时计划';
+    },
     async refresh() {
       this.loading = true;
       try {
@@ -522,7 +709,9 @@ export default {
           cancelButtonText: '取消',
           type: 'warning'
         });
-      } catch { return; }
+      } catch {
+        return;
+      }
       try {
         await backupService.deleteTask(task.id);
         Message.success('任务已删除');
@@ -544,14 +733,6 @@ export default {
       this.$store.dispatch('tasks/noteSubmitted', res.taskId);
       Message.success('任务已提交，正在后台执行');
       await this.fetchTasks();
-    },
-    async handleRowCmd(cmd, task) {
-      switch (cmd) {
-        case 'records': return this.viewRecords(task);
-        case 'browse':  return this.browseFiles(task);
-        case 'edit':    return this.openEditDialog(task);
-        case 'delete':  return this.deleteTask(task);
-      }
     },
     async viewRecords(task) {
       this.currentTaskId = task.id;
@@ -590,21 +771,14 @@ export default {
       this.logDialogVisible = true;
     },
     handleFilterChange() { /* computed */ },
-    clearFilter(key) {
-      if (key === 'name') this.filters.name = '';
-      else if (key === 'repositoryId') this.filters.repositoryId = 0;
-      else if (key === 'ruleId') this.filters.ruleId = 0;
-      else if (key === 'status') this.filters.status = '';
-      else if (key === 'lastStatus') this.filters.lastStatus = '';
-    },
     resetFilters() {
-      this.filters = { name: '', repositoryId: 0, ruleId: 0, status: '', lastStatus: '' };
+      this.filters = { name: '', state: '', repositoryId: 0, ruleId: 0 };
     },
     calculateDuration(s, e) {
       if (!s) return '-';
       if (!e) return '运行中';
       const ms = new Date(e) - new Date(s);
-      const sec = Math.floor(ms / 1000);
+      const sec = Math.max(0, Math.floor(ms / 1000));
       const m = Math.floor(sec / 60);
       const h = Math.floor(m / 60);
       if (h) return `${h}h${m % 60}m${sec % 60}s`;
@@ -613,32 +787,32 @@ export default {
     },
     formatBytes(b) {
       if (!b) return '0 B';
-      const k = 1024, units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const k = 1024;
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
       const i = Math.floor(Math.log(b) / Math.log(k));
       return parseFloat((b / Math.pow(k, i)).toFixed(2)) + ' ' + units[i];
     },
     getRepositoryName(id) {
-      const r = this.repositories.find(x => x.id === id);
-      return r ? r.name : '未知';
+      const r = this.repoMap.get(id);
+      return r ? r.name : '未知仓库';
     },
     getBackupRuleName(id) {
       if (!id) return '';
-      const r = this.backupRules.find(x => x.id === id);
+      const r = this.ruleMap.get(id);
       return r ? r.name : '';
     },
     formatDate(d) {
       if (!d) return '';
-      try { return new Date(d).toLocaleString('zh-CN', { hour12: false }); }
-      catch { return '无效日期'; }
+      try {
+        return new Date(d).toLocaleString('zh-CN', { hour12: false });
+      } catch {
+        return '无效日期';
+      }
     },
     truncatePath(p) {
       if (!p) return '';
-      if (p.length <= 50) return p;
-      return p.substring(0, 25) + '...' + p.substring(p.length - 22);
-    },
-    getStatusTone(s) {
-      const m = { Succeeded: 'success', Failed: 'danger', Running: 'warning' };
-      return m[s] || 'neutral';
+      if (p.length <= 44) return p;
+      return p.substring(0, 22) + '...' + p.substring(p.length - 19);
     },
     getStatusText(s) {
       const m = { Succeeded: '成功', Failed: '失败', Running: '运行中', NeverRun: '未运行', Pending: '排队中' };
@@ -659,7 +833,7 @@ export default {
           const rule = await backupRuleService.getRuleById(task.backupRuleId);
           if (reqSeq !== this.browseReqSeq) return;
           this.currentExcludePatterns = rule.excludePatterns;
-        } catch (e) { /* 忽略规则加载错误,继续浏览 */ }
+        } catch (e) { /* 忽略规则加载错误，继续浏览 */ }
       }
       if (reqSeq !== this.browseReqSeq) return;
       this.fileTreeVersion += 1;
@@ -737,109 +911,255 @@ export default {
           if (pat.endsWith('/')) return p.startsWith(pat) || p.includes('/' + pat) || p === pat.slice(0, -1);
           return p.includes('/' + pat) || p.endsWith(pat) || p === pat;
         });
-      } catch (e) { return false; }
+      } catch (e) {
+        return false;
+      }
     }
   }
 };
 </script>
 
 <style scoped>
-.tasks-page { padding-bottom: 24px; }
-
-.mini-stat {
-  padding: 14px 18px;
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-card);
-  border-left: 4px solid var(--brand-500);
-  box-shadow: var(--shadow-sm);
-  margin-bottom: 16px;
+.tasks-page {
+  padding-bottom: 24px;
 }
-.mini-stat--success { border-left-color: var(--success-500); }
-.mini-stat--warning { border-left-color: var(--warning-500); }
-.mini-stat--danger  { border-left-color: var(--danger-500); }
-.mini-stat__label { font-size: 12px; color: var(--color-text-secondary); }
-.mini-stat__value { font-size: 22px; font-weight: 700; color: var(--color-text-primary); margin-top: 4px; }
 
-/* 筛选条 */
-.filter-bar { padding: 12px !important; }
-.filter-bar__row {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  align-items: center;
+.tasks-kpi-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
-.filter-bar__search { width: 240px; max-width: 100%; }
-.filter-bar__select { width: 180px; }
-.filter-bar__chips {
-  margin-top: 10px;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
+
+.kpi-icon {
+  font-size: 16px;
+}
+.kpi-icon--brand { color: var(--brand-400); }
+.kpi-icon--success { color: var(--success-500); }
+.kpi-icon--info { color: var(--info-500); }
+.kpi-icon--danger { color: var(--danger-500); }
+
+.toolbar-search {
+  width: 240px;
+  max-width: 100%;
+}
+
+.toolbar-select {
+  width: 150px;
+}
+
+.toolbar-summary {
+  font-size: 12px;
+  color: var(--color-text-secondary);
 }
 
 /* 任务行 */
-.task-row { display: flex; align-items: center; gap: 12px; }
+.task-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
 .task-row__icon {
   width: 36px;
   height: 36px;
   border-radius: var(--radius-md);
-  background: var(--brand-50);
-  color: var(--brand-600);
   display: flex;
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
   font-size: 16px;
 }
-.task-row__body { min-width: 0; flex: 1; }
-.task-row__name { font-weight: 600; color: var(--color-text-primary); }
-.task-row__meta { display: flex; gap: 6px; margin-top: 4px; flex-wrap: wrap; }
 
-.path-cell { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; }
-.path-cell__icon { color: var(--color-text-secondary); font-size: 12px; flex-shrink: 0; }
-.path-cell span {
+.task-row__icon--brand { background: var(--brand-50); color: var(--brand-400); }
+.task-row__icon--success { background: var(--success-50); color: var(--success-600); }
+.task-row__icon--danger { background: var(--danger-50); color: var(--danger-600); }
+.task-row__icon--running { background: var(--info-50); color: var(--info-600); }
+.task-row__icon--neutral { background: var(--gray-100); color: var(--color-text-secondary); }
+
+.task-row__body {
+  min-width: 0;
+  flex: 1;
+}
+
+.task-row__name {
+  font-weight: 600;
+  color: var(--color-text-primary);
+  font-size: 14px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 280px;
-  display: inline-block;
-  vertical-align: middle;
 }
 
-.cron-pill {
-  display: inline-block;
-  background: var(--color-bg-soft);
-  padding: 2px 8px;
-  border-radius: var(--radius-sm);
-  font-family: "SF Mono", Consolas, monospace;
-  font-size: 12px;
+.task-row__path {
+  margin-top: 4px;
+}
+
+/* 仓库与规则 */
+.repo-rule-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.repo-rule-cell__repo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  font-size: 13px;
+}
+
+.repo-rule-cell__repo i {
   color: var(--brand-400);
-  border: 1px solid var(--brand-100);
 }
 
-/* 操作列:统一 flex 布局防折行 */
+.repo-rule-cell__rule {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* 调度列 */
+.cron-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.cron-cell__human {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.cron-cell__expr {
+  font-size: 11px;
+  color: var(--brand-400);
+}
+
+/* 状态列 */
+.status-cell {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.paused-hint {
+  font-size: 11px;
+  color: var(--color-text-placeholder);
+}
+
+/* 操作列 */
 .row-actions {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
+  gap: 8px;
   white-space: nowrap;
+}
+
+/* 弹窗分组 */
+.form-section {
+  padding: 14px 16px;
+  margin-bottom: 14px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-soft);
+  border: 1px solid var(--color-border);
+}
+
+.form-section--last {
+  margin-bottom: 0;
+}
+
+.form-section__title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin-bottom: 12px;
+}
+
+.form-section__title i {
+  color: var(--brand-400);
+}
+
+.cron-preview {
+  margin-top: 8px;
+  padding: 6px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--brand-50);
+  border: 1px solid var(--brand-200);
+  font-size: 12px;
+  color: var(--brand-300);
+  display: flex;
+  align-items: center;
   gap: 6px;
 }
-.row-more { margin-left: 0; }
 
-/* Cron 快捷 */
-.cron-quick { margin-left: 6px; cursor: pointer; }
+.cron-presets {
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.cron-presets__label {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.cron-preset-btn {
+  padding: 3px 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-card);
+  color: var(--color-text-regular);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color var(--transition-fast), color var(--transition-fast), background-color var(--transition-fast);
+}
+
+.cron-preset-btn:hover {
+  border-color: var(--brand-200);
+  background: var(--brand-50);
+  color: var(--brand-300);
+}
+
+.form-tip {
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.form-tip i {
+  margin-right: 4px;
+}
+
+.w-100 {
+  width: 100%;
+}
+
+.mb-0 {
+  margin-bottom: 0 !important;
+}
 
 /* 抽屉工具栏与分页 */
 .drawer-header-toolbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 16px;
+  padding: 10px 18px;
   background: var(--color-bg-soft);
   border-bottom: 1px solid var(--color-border-soft);
 }
+
 .drawer-pagination {
   margin-top: 16px;
   padding: 12px 0;
@@ -848,22 +1168,53 @@ export default {
   border-top: 1px solid var(--color-border-soft);
 }
 
-/* 表单 */
-.form-tip { margin-top: 6px; font-size: 12px; color: var(--color-text-secondary); }
-.form-tip i { margin-right: 4px; }
-.w-100 { width: 100%; }
-
 /* 空状态 */
 .empty {
   text-align: center;
-  padding: 60px 20px;
+  padding: 64px 20px;
 }
-.empty--small { padding: 30px 20px; }
-.empty__title { font-size: 16px; font-weight: 600; color: var(--color-text-primary); }
-.empty__desc { font-size: 13px; color: var(--color-text-secondary); margin-top: 4px; }
+
+.empty--small {
+  padding: 32px 20px;
+}
+
+.empty__icon {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--radius-xl);
+  background: var(--brand-50);
+  color: var(--brand-400);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 26px;
+  margin-bottom: 14px;
+}
+
+.empty__title {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+
+.empty__desc {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-top: 6px;
+}
+
+.empty__actions {
+  margin-top: 16px;
+  display: inline-flex;
+  gap: 10px;
+}
 
 /* 抽屉内容 */
-.drawer-content { padding: 16px; height: 100%; overflow-y: auto; }
+.drawer-content {
+  padding: 16px;
+  height: 100%;
+  overflow-y: auto;
+}
 
 .record-item {
   border: 1px solid var(--color-border);
@@ -872,7 +1223,11 @@ export default {
   background: var(--color-bg-card);
   overflow: hidden;
 }
-.record-item--failed { border-color: rgba(239, 68, 68, 0.4); }
+
+.record-item--failed {
+  border-color: var(--danger-500);
+}
+
 .record-header {
   display: flex;
   justify-content: space-between;
@@ -881,14 +1236,22 @@ export default {
   background: var(--color-bg-soft);
   border-bottom: 1px solid var(--color-border-soft);
 }
-.record-time { font-size: 12px; color: var(--color-text-secondary); }
 
-.record-details { padding: 12px 14px; }
+.record-time {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+.record-details {
+  padding: 12px 14px;
+}
+
 .detail-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 8px 16px;
 }
+
 .detail-item {
   display: flex;
   justify-content: space-between;
@@ -896,7 +1259,11 @@ export default {
   font-size: 13px;
   padding: 4px 0;
 }
-.detail-label { color: var(--color-text-secondary); font-weight: 500; }
+
+.detail-label {
+  color: var(--color-text-secondary);
+  font-weight: 500;
+}
 
 .error-section {
   margin-top: 10px;
@@ -905,13 +1272,14 @@ export default {
   border-radius: var(--radius-sm);
   border-left: 3px solid var(--danger-500);
 }
+
 .error-content {
   margin-top: 6px;
   color: var(--danger-600);
   white-space: pre-wrap;
   word-break: break-all;
   font-size: 12px;
-  font-family: "SF Mono", Consolas, monospace;
+  font-family: "JetBrains Mono", "SF Mono", Consolas, monospace;
 }
 
 .record-actions {
@@ -921,22 +1289,11 @@ export default {
   padding-top: 8px;
 }
 
-/* 日志 */
-.log-content {
-  white-space: pre-wrap;
-  word-break: break-all;
-  max-height: 500px;
-  overflow-y: auto;
-  background: var(--gray-900);
-  color: #e2e8f0;
-  padding: 14px;
-  border-radius: var(--radius-md);
-  font-family: "SF Mono", Consolas, monospace;
-  font-size: 12px;
+/* 文件浏览器 */
+.file-browser {
+  padding: 4px;
 }
 
-/* 文件浏览器 */
-.file-browser { padding: 4px; }
 .custom-tree-node {
   flex: 1;
   display: flex;
@@ -944,9 +1301,19 @@ export default {
   font-size: 14px;
   padding-right: 8px;
 }
-.excluded-file { color: var(--gray-400); text-decoration: line-through; }
+
+.excluded-file {
+  color: var(--color-text-placeholder);
+  text-decoration: line-through;
+}
 
 @media (max-width: 992px) {
-  .filter-bar__search, .filter-bar__select { width: 100%; }
+  .tasks-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .toolbar-search,
+  .toolbar-select {
+    width: 100%;
+  }
 }
 </style>

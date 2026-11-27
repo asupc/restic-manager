@@ -1,37 +1,141 @@
 <template>
     <div class="snapshots-page">
-        <div class="page-header">
-            <div>
-                <el-page-header @back="goBack" :content="`仓库 ${repository?.name || ''} · 快照`">
-                </el-page-header>
-                <div v-if="repository" class="repo-info mt-2">
-                    <span class="text-mono text-secondary" style="font-size:12px;">
-                        <i :class="repoTypeIcon(repository.type)"></i> {{ repository.path }}
+        <!-- 仓库摘要横幅卡 -->
+        <div class="rm-surface repo-hero">
+            <div class="repo-hero__main">
+                <div class="repo-hero__top">
+                    <el-button
+                        class="repo-hero__back"
+                        size="small"
+                        icon="el-icon-arrow-left"
+                        @click="goBack"
+                    >
+                        返回
+                    </el-button>
+                    <h2 class="repo-hero__title">
+                        {{ repository && repository.name ? repository.name : '仓库快照' }}
+                    </h2>
+                    <span v-if="repository" class="repo-type-badge">
+                        <i :class="repoTypeIcon(repository.type)"></i>
+                        {{ repoTypeLabel(repository.type) }}
                     </span>
-                    <span class="rm-badge rm-badge--success" v-if="repository.isInitialized">已初始化</span>
-                    <span class="rm-badge rm-badge--warning" v-else>未初始化</span>
+                    <span
+                        v-if="repository"
+                        class="rm-status-pill"
+                        :class="repository.isInitialized ? 'rm-status-pill--success' : 'rm-status-pill--warning'"
+                    >
+                        <span class="rm-status-pill__dot"></span>
+                        {{ repository.isInitialized ? '已初始化 · 健康' : '未初始化' }}
+                    </span>
+                </div>
+
+                <div v-if="repository && repository.path" class="repo-hero__path-row">
+                    <span class="repo-hero__path-label">仓库位置</span>
+                    <span class="rm-code-chip repo-hero__path-chip" :title="repository.path">
+                        <i :class="repoTypeIcon(repository.type)"></i>
+                        <span class="rm-code-chip__text">{{ repository.path }}</span>
+                        <button
+                            type="button"
+                            class="rm-code-chip__copy"
+                            title="复制仓库路径"
+                            @click="copyRepoPath"
+                        >
+                            <i class="el-icon-document-copy"></i>
+                        </button>
+                    </span>
                 </div>
             </div>
-            <div class="page-header__actions">
-                <el-button round icon="el-icon-search" size="small" @click="openSearch" :disabled="!repository || !repository.isInitialized">搜索文件</el-button>
+
+            <div class="repo-hero__actions">
+                <el-button
+                    type="primary"
+                    size="small"
+                    icon="el-icon-download"
+                    :loading="syncing"
+                    :disabled="!repository || !repository.isInitialized"
+                    @click="syncSnapshotsFromRemote"
+                >
+                    同步快照
+                </el-button>
+                <el-button
+                    size="small"
+                    icon="el-icon-search"
+                    :disabled="!repository || !repository.isInitialized"
+                    @click="openSearch"
+                >
+                    搜索文件
+                </el-button>
+                <el-button
+                    size="small"
+                    icon="el-icon-refresh"
+                    :loading="loading"
+                    @click="fetchSnapshots"
+                >
+                    刷新
+                </el-button>
                 <el-dropdown trigger="click" @command="handleMaintenance" :disabled="maintenanceLoading">
-                    <el-button round icon="el-icon-setting" size="small" :loading="maintenanceLoading">
-                        运维<i class="el-icon-arrow-down el-icon--right"></i>
+                    <el-button size="small" icon="el-icon-setting" :loading="maintenanceLoading">
+                        更多运维<i class="el-icon-arrow-down el-icon--right"></i>
                     </el-button>
                     <el-dropdown-menu slot="dropdown">
-                        <el-dropdown-item command="unlock" icon="el-icon-unlock">解锁(清理陈旧锁)</el-dropdown-item>
-                        <el-dropdown-item command="force-unlock" icon="el-icon-warning-outline">强制解锁(移除所有锁)</el-dropdown-item>
-                        <el-dropdown-item command="prune" icon="el-icon-delete">清理未引用数据(prune)</el-dropdown-item>
-                        <el-dropdown-item command="deep-check" icon="el-icon-cpu">深度校验(读 5% 数据)</el-dropdown-item>
+                        <el-dropdown-item command="unlock" icon="el-icon-unlock">解锁（清理陈旧锁）</el-dropdown-item>
+                        <el-dropdown-item command="force-unlock" icon="el-icon-warning-outline">强制解锁（移除所有锁）</el-dropdown-item>
+                        <el-dropdown-item command="prune" icon="el-icon-delete" divided>清理未引用数据（prune）</el-dropdown-item>
+                        <el-dropdown-item command="deep-check" icon="el-icon-cpu">深度校验（读 5% 数据）</el-dropdown-item>
                         <el-dropdown-item command="repair-index" icon="el-icon-refresh" divided>修复索引</el-dropdown-item>
                         <el-dropdown-item command="repair-snapshots" icon="el-icon-first-aid-kit">修复损坏快照</el-dropdown-item>
                     </el-dropdown-menu>
                 </el-dropdown>
-                <el-button round icon="el-icon-download" size="small" :loading="syncing" @click="syncSnapshotsFromRemote" :disabled="!repository || !repository.isInitialized">同步远端</el-button>
-                <el-button round icon="el-icon-refresh" size="small" :loading="loading" @click="fetchSnapshots">刷新</el-button>
             </div>
         </div>
 
+        <!-- 紧凑 KPI 指标卡片网格 -->
+        <div class="rm-kpi-grid repo-kpi-grid">
+            <div class="rm-kpi-card rm-kpi-card--brand">
+                <div class="rm-kpi-card__label">
+                    <span>快照总数</span>
+                    <i class="el-icon-camera repo-kpi__icon"></i>
+                </div>
+                <div class="rm-kpi-card__value">{{ snapshotCountDisplay }}</div>
+                <div class="rm-kpi-card__meta">
+                    <span v-if="repoStats && repoStats.snapshots_count !== undefined && repoStats.snapshots_count !== null">
+                        远端统计 {{ formatNumber(repoStats.snapshots_count) }} 个
+                    </span>
+                    <span v-else>当前本地缓存快照数</span>
+                </div>
+            </div>
+
+            <div class="rm-kpi-card rm-kpi-card--info">
+                <div class="rm-kpi-card__label">
+                    <span>文件总数</span>
+                    <i class="el-icon-document repo-kpi__icon"></i>
+                </div>
+                <div class="rm-kpi-card__value">{{ totalFileCountDisplay }}</div>
+                <div class="rm-kpi-card__meta">来自最近一次仓库统计</div>
+            </div>
+
+            <div class="rm-kpi-card rm-kpi-card--success">
+                <div class="rm-kpi-card__label">
+                    <span>数据总量</span>
+                    <i class="el-icon-coin repo-kpi__icon"></i>
+                </div>
+                <div class="rm-kpi-card__value">{{ totalSizeDisplay }}</div>
+                <div class="rm-kpi-card__meta">去重压缩后仓库逻辑规模</div>
+            </div>
+
+            <div class="rm-kpi-card rm-kpi-card--purple">
+                <div class="rm-kpi-card__label">
+                    <span>最近检查/统计</span>
+                    <i class="el-icon-time repo-kpi__icon"></i>
+                </div>
+                <div class="rm-kpi-card__value repo-kpi__value--date">{{ lastStatsTimeDisplay }}</div>
+                <div class="rm-kpi-card__meta">
+                    {{ repository && repository.statsUpdatedAt ? '统计结果已持久化缓存' : '可在仓库页或维护计划触发统计' }}
+                </div>
+            </div>
+        </div>
+
+        <!-- 快照列表 -->
         <snapshot-list
             :snapshots="snapshots"
             :repository-id="$route.params.id"
@@ -44,31 +148,80 @@
         ></snapshot-list>
 
         <!-- 跨快照文件搜索 -->
-        <el-dialog :visible.sync="searchDialogVisible" title="跨快照搜索文件" width="640px" :close-on-click-modal="false" append-to-body>
+        <el-dialog
+            :visible.sync="searchDialogVisible"
+            title="跨快照搜索文件"
+            width="680px"
+            :close-on-click-modal="false"
+            append-to-body
+        >
             <div class="search-bar">
                 <el-input
                     v-model="searchPattern"
-                    placeholder="输入文件名或通配符,如 *.docx"
+                    placeholder="输入文件名或通配符，例如 *.docx、config.json"
                     prefix-icon="el-icon-search"
                     clearable
                     @keyup.enter.native="performSearch"
                 ></el-input>
-                <el-button type="primary" icon="el-icon-search" :loading="searching" @click="performSearch">搜索</el-button>
+                <el-button type="primary" icon="el-icon-search" :loading="searching" @click="performSearch">
+                    搜索
+                </el-button>
             </div>
-            <div v-if="searchError" class="search-error">{{ searchError }}</div>
-            <div v-else-if="searched && searchResults.length === 0 && !searching" class="search-empty">未找到匹配的文件</div>
-            <div v-else class="search-results">
+            <div class="search-tips">
+                支持通配符匹配（<span class="text-mono">*</span>、<span class="text-mono">?</span>），将在该仓库的全部历史快照中检索文件路径。
+            </div>
+
+            <el-alert
+                v-if="searchError"
+                type="error"
+                :title="searchError"
+                :closable="false"
+                show-icon
+                class="search-alert"
+            ></el-alert>
+
+            <div v-else-if="searching" class="search-state">
+                <i class="el-icon-loading search-state__icon"></i>
+                <div class="search-state__title">正在跨快照检索匹配文件...</div>
+                <div class="search-state__desc">远端仓库检索可能需要数秒，请稍候</div>
+            </div>
+
+            <div v-else-if="searched && searchResults.length === 0" class="search-state">
+                <i class="el-icon-document-delete search-state__icon"></i>
+                <div class="search-state__title">未找到匹配的文件</div>
+                <div class="search-state__desc">尝试更换关键字或使用更宽泛的通配符（如 *keyword*）</div>
+            </div>
+
+            <div v-else-if="searchResults.length > 0" class="search-results">
+                <div class="search-results__summary">
+                    共在 <span class="text-mono text-bold">{{ searchResults.length }}</span> 个快照中找到匹配项
+                </div>
                 <div v-for="r in searchResults" :key="r.snapshot" class="search-result">
                     <div class="search-result__head">
-                        <i class="el-icon-time"></i>
-                        <span class="text-mono">{{ (r.snapshot || '').substring(0, 8) }}</span>
-                        <span class="text-secondary">{{ r.hits }} 处命中</span>
+                        <span class="rm-code-chip">
+                            <i class="el-icon-time"></i>
+                            <span>{{ (r.snapshot || '').substring(0, 8) }}</span>
+                        </span>
+                        <span class="rm-status-pill rm-status-pill--info">
+                            {{ r.hits || (r.matches ? r.matches.length : 0) }} 处命中
+                        </span>
                     </div>
-                    <div v-for="(m, i) in r.matches" :key="i" class="search-result__file">
-                        <span class="text-mono">{{ m.path }}</span>
-                        <span class="text-secondary">{{ formatSize(m.size) }}</span>
+                    <div class="search-result__files">
+                        <div v-for="(m, i) in r.matches" :key="i" class="search-result__file">
+                            <span class="search-result__path text-mono" :title="m.path">
+                                <i class="el-icon-document"></i>
+                                {{ m.path }}
+                            </span>
+                            <span class="search-result__size text-mono text-secondary">{{ formatSize(m.size) }}</span>
+                        </div>
                     </div>
                 </div>
+            </div>
+
+            <div v-else class="search-state search-state--idle">
+                <i class="el-icon-search search-state__icon"></i>
+                <div class="search-state__title">输入文件名开始搜索</div>
+                <div class="search-state__desc">快速定位指定文件分布在哪些历史快照版本中</div>
             </div>
         </el-dialog>
     </div>
@@ -79,7 +232,7 @@ import { Message, MessageBox } from 'element-ui';
 import { repositoryService } from '@/services/repository.service';
 import { TASK_TYPES } from '@/services/task.service';
 import { pollTask } from '@/utils/task-poller';
-import { typeIcon as repoTypeIcon } from '@/utils/repository-types';
+import { REPOSITORY_TYPE_META, typeIcon as repoTypeIcon } from '@/utils/repository-types';
 import SnapshotList from '@/components/SnapshotList.vue';
 
 function safeParseJson(json, fallback = {}) {
@@ -113,6 +266,28 @@ export default {
     computed: {
         maintenanceLoading() {
             return this.maintenanceRunningCount > 0;
+        },
+        repoStats() {
+            if (!this.repository || !this.repository.statsJson) return null;
+            const parsed = safeParseJson(this.repository.statsJson, null);
+            return parsed && typeof parsed === 'object' ? parsed : null;
+        },
+        snapshotCountDisplay() {
+            return this.formatNumber(this.snapshots ? this.snapshots.length : 0);
+        },
+        totalFileCountDisplay() {
+            if (!this.repoStats) return '—';
+            const val = this.repoStats.total_file_count;
+            return val !== undefined && val !== null ? this.formatNumber(val) : '—';
+        },
+        totalSizeDisplay() {
+            if (!this.repoStats) return '—';
+            const val = this.repoStats.total_size;
+            return val !== undefined && val !== null ? this.formatSize(val) : '—';
+        },
+        lastStatsTimeDisplay() {
+            if (!this.repository || !this.repository.statsUpdatedAt) return '尚未统计';
+            return this.formatDate(this.repository.statsUpdatedAt);
         }
     },
     watch: {
@@ -142,7 +317,21 @@ export default {
     },
     methods: {
         repoTypeIcon,
+        repoTypeLabel(type) {
+            const meta = REPOSITORY_TYPE_META[type];
+            return meta ? meta.label : (type || 'local');
+        },
         goBack() { this.$router.go(-1); },
+        async copyRepoPath() {
+            const text = this.repository && this.repository.path ? this.repository.path : '';
+            if (!text) return;
+            try {
+                await navigator.clipboard.writeText(text);
+                Message.success('仓库路径已复制到剪贴板');
+            } catch (e) {
+                Message.info('请手动选中路径复制');
+            }
+        },
         async initPage() {
             const token = this._routeToken;
             await this.fetchSnapshots();
@@ -448,9 +637,21 @@ export default {
         },
         formatSize(bytes) {
             if (!bytes) return '0 B';
-            const k = 1024, units = ['B', 'KB', 'MB', 'GB', 'TB'];
-            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            const k = 1024;
+            const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+            const i = Math.min(Math.floor(Math.log(bytes) / Math.log(k)), units.length - 1);
             return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + units[i];
+        },
+        formatNumber(val) {
+            if (val === null || val === undefined || isNaN(Number(val))) return '—';
+            return Number(val).toLocaleString('zh-CN');
+        },
+        formatDate(value) {
+            if (!value) return '—';
+            const d = new Date(value);
+            if (isNaN(d.getTime())) return String(value);
+            const pad = n => String(n).padStart(2, '0');
+            return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
         }
     },
     async mounted() {
@@ -465,18 +666,245 @@ export default {
 </script>
 
 <style scoped>
-.snapshots-page { padding-bottom: 24px; }
-.repo-info { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.repo-info i { margin-right: 4px; }
-.page-header__actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.snapshots-page {
+    padding-bottom: var(--space-8);
+}
 
-.search-bar { display: flex; gap: 8px; margin-bottom: 12px; }
-.search-error { color: var(--danger-500, #f56c6c); font-size: 13px; padding: 12px 0; }
-.search-empty { text-align: center; color: var(--color-text-secondary); padding: 24px 0; }
-.search-results { max-height: 420px; overflow-y: auto; }
-.search-result { border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: 10px 12px; margin-bottom: 10px; }
-.search-result__head { display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 6px; }
-.search-result__head i { color: var(--brand-600); }
-.search-result__file { display: flex; justify-content: space-between; gap: 12px; font-size: 12px; padding: 3px 0; }
-.search-result__file .text-mono { word-break: break-all; }
+/* 顶部仓库摘要横幅卡 */
+.repo-hero {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: var(--space-4);
+    padding: 18px 22px;
+    margin-bottom: var(--space-5);
+    position: relative;
+}
+
+.repo-hero::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, var(--brand-500), var(--info-500) 45%, transparent 90%);
+    opacity: 0.9;
+}
+
+.repo-hero__main {
+    flex: 1;
+    min-width: 260px;
+}
+
+.repo-hero__top {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 10px;
+}
+
+.repo-hero__back {
+    padding: 6px 12px;
+}
+
+.repo-hero__title {
+    margin: 0;
+    font-size: var(--font-xl);
+    font-weight: 700;
+    color: var(--color-text-primary);
+    letter-spacing: -0.02em;
+    line-height: 1.3;
+}
+
+.repo-type-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 10px;
+    border-radius: var(--radius-full);
+    font-size: var(--font-xs);
+    font-weight: 600;
+    color: var(--brand-300);
+    background: var(--brand-50);
+    border: 1px solid var(--brand-200);
+}
+
+.repo-hero__path-row {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-top: 12px;
+}
+
+.repo-hero__path-label {
+    font-size: var(--font-xs);
+    color: var(--color-text-secondary);
+    flex-shrink: 0;
+}
+
+.repo-hero__path-chip {
+    max-width: min(100%, 620px);
+    padding: 3px 8px 3px 10px;
+}
+
+.repo-hero__actions {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    flex-shrink: 0;
+}
+
+/* KPI 指标卡微调 */
+.repo-kpi-grid {
+    margin-bottom: var(--space-5);
+}
+
+.repo-kpi__icon {
+    font-size: 15px;
+    color: var(--color-text-placeholder);
+}
+
+.repo-kpi__value--date {
+    font-size: var(--font-xl);
+    line-height: 1.45;
+    padding-top: 4px;
+}
+
+/* 跨快照文件搜索弹窗 */
+.search-bar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+}
+
+.search-tips {
+    margin-top: 8px;
+    margin-bottom: 14px;
+    font-size: var(--font-xs);
+    color: var(--color-text-secondary);
+}
+
+.search-alert {
+    margin-bottom: 12px;
+}
+
+.search-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding: 40px 20px;
+    border: 1px dashed var(--color-border-strong);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-soft);
+}
+
+.search-state__icon {
+    font-size: 30px;
+    color: var(--brand-400);
+    margin-bottom: 10px;
+}
+
+.search-state--idle .search-state__icon {
+    color: var(--color-text-placeholder);
+}
+
+.search-state__title {
+    font-size: var(--font-base);
+    font-weight: 600;
+    color: var(--color-text-primary);
+}
+
+.search-state__desc {
+    margin-top: 4px;
+    font-size: var(--font-xs);
+    color: var(--color-text-secondary);
+}
+
+.search-results {
+    max-height: 430px;
+    overflow-y: auto;
+    padding-right: 4px;
+}
+
+.search-results__summary {
+    font-size: var(--font-xs);
+    color: var(--color-text-secondary);
+    margin-bottom: 10px;
+}
+
+.search-result {
+    border: 1px solid var(--color-border);
+    border-radius: var(--radius-md);
+    background: var(--color-bg-soft);
+    padding: 12px 14px;
+    margin-bottom: 10px;
+    transition: border-color var(--transition-fast);
+}
+
+.search-result:hover {
+    border-color: var(--brand-200);
+}
+
+.search-result__head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    margin-bottom: 10px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--color-border-soft);
+}
+
+.search-result__files {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.search-result__file {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 4px 6px;
+    border-radius: var(--radius-xs);
+    font-size: 12px;
+}
+
+.search-result__file:hover {
+    background: var(--color-bg-hover);
+}
+
+.search-result__path {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--color-text-regular);
+    word-break: break-all;
+}
+
+.search-result__path i {
+    color: var(--color-text-placeholder);
+    flex-shrink: 0;
+}
+
+.search-result__size {
+    flex-shrink: 0;
+    font-size: 12px;
+}
+
+@media (max-width: 768px) {
+    .repo-hero {
+        padding: 14px 16px;
+    }
+    .repo-hero__actions {
+        width: 100%;
+    }
+}
 </style>

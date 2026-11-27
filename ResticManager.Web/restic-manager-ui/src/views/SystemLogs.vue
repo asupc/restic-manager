@@ -4,115 +4,172 @@
     <div class="page-header">
       <div>
         <h2 class="page-header__title">系统日志</h2>
-        <div class="page-header__subtitle">查看应用运行日志：备份任务、调度器、仓库操作与异常记录</div>
+        <div class="page-header__subtitle">实时排查应用运行日志：备份任务、调度器、仓库操作与异常堆栈</div>
       </div>
       <div class="page-header__actions">
-        <el-button round icon="el-icon-refresh" size="small" :loading="loading" @click="fetchLogs">刷新</el-button>
+        <span v-if="autoRefresh" class="rm-status-pill rm-status-pill--running">
+          <span class="rm-status-pill__dot"></span>
+          自动刷新中 (10s)
+        </span>
+        <span class="rm-status-pill rm-status-pill--neutral">
+          共 <span class="text-mono">{{ total }}</span> 条
+        </span>
       </div>
     </div>
 
-    <!-- 筛选卡片 -->
-    <el-card class="filter-card mb-4" shadow="never">
-      <div class="filter-row">
-        <div class="filter-item filter-item--search">
-          <el-input
-            v-model="filters.keyword"
-            placeholder="按消息、类别或异常内容搜索..."
-            prefix-icon="el-icon-search"
-            clearable
-            size="small"
-            @input="handleFilterChange"
-          />
-        </div>
-
-        <div class="filter-item">
-          <el-select
-            v-model="filters.level"
-            placeholder="全部级别"
-            clearable
-            size="small"
-            @change="handleFilterChange"
-            style="width: 160px;"
+    <!-- 统一筛选工具条 -->
+    <div class="rm-toolbar logs-toolbar">
+      <div class="rm-toolbar__group">
+        <!-- 日志级别快捷胶囊筛选 -->
+        <div class="level-pills" role="group" aria-label="日志级别筛选">
+          <button
+            v-for="item in levelOptions"
+            :key="item.label"
+            type="button"
+            class="level-pill"
+            :class="[
+              'level-pill--' + item.tone,
+              { 'is-active': filters.level === item.value }
+            ]"
+            @click="selectLevel(item.value)"
           >
-            <el-option label="全部级别" :value="null"></el-option>
-            <el-option label="信息及以上" value="Information"></el-option>
-            <el-option label="警告及以上" value="Warning"></el-option>
-            <el-option label="错误及以上" value="Error"></el-option>
-            <el-option label="仅严重错误" value="Critical"></el-option>
-          </el-select>
-        </div>
-
-        <div class="filter-item">
-          <el-date-picker
-            v-model="dateRange"
-            type="daterange"
-            size="small"
-            value-format="yyyy-MM-dd"
-            range-separator="至"
-            start-placeholder="开始日期"
-            end-placeholder="结束日期"
-            :clearable="true"
-            style="width: 260px;"
-            @change="handleDateChange"
-          />
-        </div>
-
-        <div class="filter-item filter-item--reset" v-if="hasActiveFilter">
-          <el-button size="small" plain type="info" icon="el-icon-refresh-left" @click="resetFilters">重置筛选</el-button>
+            <span class="level-pill__dot"></span>
+            <span>{{ item.label }}</span>
+          </button>
         </div>
       </div>
-    </el-card>
 
-    <!-- 日志表格 -->
-    <el-card shadow="never" class="table-card">
+      <div class="rm-toolbar__group logs-toolbar__controls">
+        <el-input
+          v-model="filters.keyword"
+          placeholder="搜索消息、类别或异常..."
+          prefix-icon="el-icon-search"
+          clearable
+          size="small"
+          class="logs-toolbar__search"
+          @input="handleFilterChange"
+        />
+
+        <el-date-picker
+          v-model="dateRange"
+          type="daterange"
+          size="small"
+          value-format="yyyy-MM-dd"
+          range-separator="至"
+          start-placeholder="开始日期"
+          end-placeholder="结束日期"
+          :clearable="true"
+          class="logs-toolbar__date"
+          @change="handleDateChange"
+        />
+
+        <div class="auto-refresh-toggle">
+          <span class="auto-refresh-toggle__label">自动刷新</span>
+          <el-switch v-model="autoRefresh" @change="handleAutoRefreshChange"></el-switch>
+        </div>
+
+        <el-button size="small" icon="el-icon-refresh" :loading="loading" @click="fetchLogs">刷新</el-button>
+        <el-button
+          v-if="hasActiveFilter"
+          size="small"
+          icon="el-icon-refresh-left"
+          @click="resetFilters"
+        >
+          重置
+        </el-button>
+      </div>
+    </div>
+
+    <!-- 终端风格日志视图 -->
+    <div class="rm-surface logs-surface">
       <div v-if="!loading && logs.length === 0" class="empty">
+        <i class="el-icon-tickets empty__icon"></i>
         <div class="empty__title">{{ hasActiveFilter ? '未找到符合条件的日志' : '暂无系统日志' }}</div>
         <div class="empty__desc">{{ hasActiveFilter ? '可尝试清空筛选条件或调整搜索关键字' : '应用运行产生的日志将展示在此处（按天保留）' }}</div>
-        <el-button v-if="hasActiveFilter" size="small" type="primary" plain class="mt-3" @click="resetFilters">清空筛选</el-button>
+        <el-button v-if="hasActiveFilter" size="small" type="primary" plain class="empty__action" @click="resetFilters">清空筛选</el-button>
       </div>
 
       <div v-else>
         <el-table
           :data="logs"
           v-loading="loading"
-          stripe
           style="width: 100%"
-          class="custom-table"
+          class="logs-table"
+          :row-class-name="getRowClassName"
         >
-          <!-- 时间 -->
-          <el-table-column label="时间" width="180" align="center">
-            <template #default="scope">
-              <span class="text-mono" style="font-size: 13px;">{{ formatTimestamp(scope.row.timestamp) }}</span>
+          <!-- 展开异常堆栈 / 完整终端视图 -->
+          <el-table-column type="expand" width="44">
+            <template slot-scope="scope">
+              <div class="log-expand-wrap">
+                <div class="rm-terminal">
+                  <div class="rm-terminal__header">
+                    <div class="log-expand__meta">
+                      <span class="log-level-badge" :class="'log-level-badge--' + getLevelTone(scope.row.level)">
+                        {{ getLevelShort(scope.row.level) }}
+                      </span>
+                      <span class="text-mono">{{ formatTimestamp(scope.row.timestamp) }}</span>
+                      <span class="log-expand__cat text-mono">{{ scope.row.category || '-' }}</span>
+                    </div>
+                    <el-button
+                      size="mini"
+                      icon="el-icon-document-copy"
+                      @click="copyLogRow(scope.row)"
+                    >
+                      复制日志/堆栈
+                    </el-button>
+                  </div>
+                  <div class="rm-terminal__body">{{ buildLogText(scope.row) }}</div>
+                </div>
+              </div>
             </template>
           </el-table-column>
 
-          <!-- 级别 -->
-          <el-table-column label="级别" width="110" align="center">
-            <template #default="scope">
-              <span class="rm-badge" :class="`rm-badge--${getLevelTone(scope.row.level)}`">
-                <span class="rm-badge__dot"></span>
-                {{ getLevelText(scope.row.level) }}
+          <!-- 时间 -->
+          <el-table-column label="时间" width="176">
+            <template slot-scope="scope">
+              <span class="text-mono log-time">{{ formatTimestamp(scope.row.timestamp) }}</span>
+            </template>
+          </el-table-column>
+
+          <!-- 等宽级别徽标 -->
+          <el-table-column label="级别" width="84" align="center">
+            <template slot-scope="scope">
+              <span
+                class="log-level-badge"
+                :class="'log-level-badge--' + getLevelTone(scope.row.level)"
+                :title="getLevelText(scope.row.level)"
+              >
+                {{ getLevelShort(scope.row.level) }}
               </span>
             </template>
           </el-table-column>
 
-          <!-- 类别 -->
-          <el-table-column label="类别" width="260">
-            <template #default="scope">
-              <span class="text-mono category-cell" :title="scope.row.category">{{ shortCategory(scope.row.category) }}</span>
+          <!-- 柔和 Category 标签 -->
+          <el-table-column label="类别" width="230">
+            <template slot-scope="scope">
+              <span class="category-chip text-mono" :title="scope.row.category">
+                {{ shortCategory(scope.row.category) }}
+              </span>
             </template>
           </el-table-column>
 
           <!-- 消息 -->
           <el-table-column label="消息" min-width="300">
-            <template #default="scope">
-              <span :class="scope.row.exception ? 'text-danger' : ''">{{ scope.row.message }}</span>
+            <template slot-scope="scope">
+              <div class="log-message-cell">
+                <span :class="scope.row.exception ? 'text-danger' : 'log-message-text'">
+                  {{ scope.row.message }}
+                </span>
+                <span v-if="scope.row.exception" class="rm-status-pill rm-status-pill--danger log-exc-tag">
+                  含异常堆栈
+                </span>
+              </div>
             </template>
           </el-table-column>
 
           <!-- 操作 -->
-          <el-table-column label="操作" width="100" align="center" fixed="right">
-            <template #default="scope">
+          <el-table-column label="操作" width="120" align="center">
+            <template slot-scope="scope">
               <el-button
                 size="mini"
                 type="text"
@@ -120,6 +177,14 @@
                 @click="openDetail(scope.row)"
               >
                 详情
+              </el-button>
+              <el-button
+                size="mini"
+                type="text"
+                icon="el-icon-document-copy"
+                @click="copyLogRow(scope.row)"
+              >
+                复制
               </el-button>
             </template>
           </el-table-column>
@@ -139,24 +204,32 @@
           />
         </div>
       </div>
-    </el-card>
+    </div>
 
     <!-- 日志详情弹窗 -->
     <el-dialog
       title="日志详情"
       :visible.sync="detailVisible"
-      width="780px"
+      width="800px"
       append-to-body
       custom-class="log-dialog"
     >
-      <div class="log-dialog__header-meta mb-2">
-        <span class="text-secondary" style="font-size: 13px;">
-          {{ formatTimestamp(currentLog?.timestamp) }} · {{ getLevelText(currentLog?.level) }} · {{ currentLog?.category }}
-        </span>
-        <el-button size="mini" plain icon="el-icon-document-copy" @click="copyDetail">复制日志</el-button>
-      </div>
-      <div class="log-terminal">
-        <pre class="log-terminal__code"><code>{{ detailText || '（无内容）' }}</code></pre>
+      <div class="rm-terminal">
+        <div class="rm-terminal__header">
+          <div class="log-expand__meta">
+            <span
+              v-if="currentLog"
+              class="log-level-badge"
+              :class="'log-level-badge--' + getLevelTone(currentLog.level)"
+            >
+              {{ getLevelShort(currentLog.level) }}
+            </span>
+            <span class="text-mono">{{ formatTimestamp(currentLog ? currentLog.timestamp : null) }}</span>
+            <span class="log-expand__cat text-mono">{{ currentLog && currentLog.category ? currentLog.category : '-' }}</span>
+          </div>
+          <el-button size="mini" icon="el-icon-document-copy" @click="copyDetail">复制日志/堆栈</el-button>
+        </div>
+        <div class="rm-terminal__body">{{ detailText || '（无内容）' }}</div>
       </div>
       <template #footer>
         <el-button size="small" @click="detailVisible = false">关闭</el-button>
@@ -184,9 +257,17 @@ export default {
       },
       dateRange: null,
       filterTimer: null,
+      autoRefresh: false,
+      autoRefreshTimer: null,
       detailVisible: false,
       currentLog: null,
-      detailText: ''
+      detailText: '',
+      levelOptions: [
+        { label: '全部', value: null, tone: 'neutral' },
+        { label: 'INFO', value: 'Information', tone: 'info' },
+        { label: 'WARN', value: 'Warning', tone: 'warning' },
+        { label: 'ERROR', value: 'Error', tone: 'danger' }
+      ]
     };
   },
   computed: {
@@ -203,6 +284,7 @@ export default {
   beforeDestroy() {
     this._destroyed = true;
     this.clearFilterTimer();
+    this.clearAutoRefreshTimer();
   },
   methods: {
     clearFilterTimer() {
@@ -210,6 +292,28 @@ export default {
         clearTimeout(this.filterTimer);
         this.filterTimer = null;
       }
+    },
+    clearAutoRefreshTimer() {
+      if (this.autoRefreshTimer) {
+        clearInterval(this.autoRefreshTimer);
+        this.autoRefreshTimer = null;
+      }
+    },
+    handleAutoRefreshChange(enabled) {
+      this.clearAutoRefreshTimer();
+      if (enabled) {
+        this.autoRefreshTimer = setInterval(() => {
+          if (this._destroyed || this.loading) return;
+          this.fetchLogs();
+        }, 10000);
+      }
+    },
+    selectLevel(level) {
+      if (this.filters.level === level) return;
+      this.clearFilterTimer();
+      this.filters.level = level;
+      this.page = 1;
+      this.fetchLogs();
     },
     async fetchLogs() {
       const seq = ++this._fetchSeq;
@@ -277,10 +381,28 @@ export default {
     getLevelTone(level) {
       switch (level) {
         case 'Critical':
-        case 'Error': return 'danger';
-        case 'Warning': return 'warning';
-        case 'Information': return 'info';
-        default: return 'neutral';
+        case 'Fatal':
+          return 'fatal';
+        case 'Error':
+          return 'danger';
+        case 'Warning':
+          return 'warning';
+        case 'Information':
+          return 'info';
+        default:
+          return 'neutral';
+      }
+    },
+    getLevelShort(level) {
+      switch (level) {
+        case 'Trace': return 'TRC';
+        case 'Debug': return 'DBG';
+        case 'Information': return 'INF';
+        case 'Warning': return 'WRN';
+        case 'Error': return 'ERR';
+        case 'Critical':
+        case 'Fatal': return 'FTL';
+        default: return 'LOG';
       }
     },
     getLevelText(level) {
@@ -294,24 +416,39 @@ export default {
         default: return level || '未知';
       }
     },
+    getRowClassName({ row }) {
+      if (row && (row.level === 'Error' || row.level === 'Critical')) return 'log-row--error';
+      if (row && row.level === 'Warning') return 'log-row--warning';
+      return '';
+    },
     shortCategory(category) {
       if (!category) return '-';
       return category.replace('ResticManager.', '');
     },
+    buildLogText(row) {
+      if (!row) return '';
+      let text = `[${this.formatTimestamp(row.timestamp)}] [${this.getLevelShort(row.level)}] ${row.category || '-'}\n${row.message || ''}`;
+      if (row.exception) {
+        text += '\n\n—— 异常堆栈 ——\n' + row.exception;
+      }
+      return text;
+    },
     openDetail(row) {
       this.currentLog = row;
-      let text = row.message || '';
-      if (row.exception) {
-        text += '\n\n—— 异常信息 ——\n' + row.exception;
-      }
-      this.detailText = text;
+      this.detailText = this.buildLogText(row);
       this.detailVisible = true;
     },
+    async copyLogRow(row) {
+      await this.copyText(this.buildLogText(row));
+    },
     async copyDetail() {
+      await this.copyText(this.detailText);
+    },
+    async copyText(text) {
       try {
-        await navigator.clipboard.writeText(this.detailText);
+        await navigator.clipboard.writeText(text || '');
         Message.success('日志已复制到剪贴板');
-      } catch {
+      } catch (e) {
         Message.info('请手动选中文本复制');
       }
     }
@@ -321,98 +458,259 @@ export default {
 
 <style scoped>
 .logs-page {
-  padding-bottom: 32px;
+  padding-bottom: var(--space-8);
 }
 
-.filter-card {
-  border: 1px solid var(--color-border);
-  background: var(--color-bg-card);
-}
-
-.filter-row {
-  display: flex;
+/* 顶部工具条 */
+.logs-toolbar {
   align-items: center;
-  flex-wrap: wrap;
-  gap: 14px;
 }
 
-.filter-item--search {
-  width: 280px;
+.logs-toolbar__controls {
+  gap: var(--space-2);
+}
+
+.logs-toolbar__search {
+  width: 240px;
   max-width: 100%;
 }
 
-.table-card {
-  border: 1px solid var(--color-border);
-  background: var(--color-bg-card);
+.logs-toolbar__date {
+  width: 246px;
 }
 
-.category-cell {
+/* 级别快捷胶囊筛选 */
+.level-pills {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px;
+  border-radius: var(--radius-full);
+  background: var(--color-bg-soft);
+  border: 1px solid var(--color-border);
+}
+
+.level-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: var(--font-xs);
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color var(--transition-fast), color var(--transition-fast), border-color var(--transition-fast);
+}
+
+.level-pill:hover {
+  color: var(--color-text-primary);
+  background: var(--color-bg-hover);
+}
+
+.level-pill__dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.7;
+}
+
+.level-pill--neutral.is-active {
+  background: var(--brand-50);
+  color: var(--brand-300);
+  border-color: var(--brand-200);
+}
+
+.level-pill--info.is-active {
+  background: var(--info-50);
+  color: var(--info-600);
+  border-color: var(--info-500);
+}
+
+.level-pill--warning.is-active {
+  background: var(--warning-50);
+  color: var(--warning-600);
+  border-color: var(--warning-500);
+}
+
+.level-pill--danger.is-active {
+  background: var(--danger-50);
+  color: var(--danger-600);
+  border-color: var(--danger-500);
+}
+
+/* 自动刷新开关 */
+.auto-refresh-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-soft);
+  border: 1px solid var(--color-border);
+}
+
+.auto-refresh-toggle__label {
+  font-size: var(--font-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+/* 日志表格容器 */
+.logs-surface {
+  min-height: 240px;
+}
+
+.log-time {
   font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* 醒目的等宽级别徽标 DBG/INF/WRN/ERR/FTL */
+.log-level-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 44px;
+  padding: 2px 7px;
+  border-radius: var(--radius-xs);
+  font-family: "JetBrains Mono", "SF Mono", Consolas, Menlo, Monaco, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  line-height: 1.4;
+  border: 1px solid transparent;
+}
+
+.log-level-badge--neutral {
+  background: var(--gray-100);
+  color: var(--color-text-secondary);
+  border-color: var(--color-border);
+}
+
+.log-level-badge--info {
+  background: var(--info-50);
+  color: var(--info-600);
+  border-color: var(--info-500);
+}
+
+.log-level-badge--warning {
+  background: var(--warning-50);
+  color: var(--warning-600);
+  border-color: var(--warning-500);
+}
+
+.log-level-badge--danger {
+  background: var(--danger-50);
+  color: var(--danger-600);
+  border-color: var(--danger-500);
+}
+
+.log-level-badge--fatal {
+  background: var(--danger-500);
+  color: var(--color-text-on-brand);
+  border-color: var(--danger-500);
+}
+
+/* 柔和 Category 标签 */
+.category-chip {
+  display: inline-block;
+  max-width: 100%;
+  padding: 2px 8px;
+  border-radius: var(--radius-xs);
+  background: var(--color-bg-soft);
+  border: 1px solid var(--color-border-soft);
+  font-size: 11.5px;
   color: var(--color-text-secondary);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  display: block;
+  vertical-align: middle;
 }
 
-/* 分页包裹器 */
+.log-message-cell {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.log-message-text {
+  color: var(--color-text-regular);
+  word-break: break-word;
+}
+
+.log-exc-tag {
+  padding: 1px 7px;
+  font-size: 11px;
+}
+
+/* 展开行终端视图 */
+.log-expand-wrap {
+  padding: 10px 16px;
+  background: var(--color-bg-soft);
+}
+
+.log-expand__meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
+}
+
+.log-expand__cat {
+  color: var(--color-text-secondary);
+  word-break: break-all;
+}
+
+/* 分页 */
 .pagination-wrapper {
-  margin-top: 20px;
+  padding: 14px 16px;
   display: flex;
   justify-content: flex-end;
-  padding-top: 12px;
   border-top: 1px solid var(--color-border-soft);
 }
 
 /* 空状态 */
 .empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
   text-align: center;
-  padding: 70px 20px;
+  padding: 72px 20px;
+}
+
+.empty__icon {
+  font-size: 38px;
+  color: var(--color-text-placeholder);
+  margin-bottom: 12px;
 }
 
 .empty__title {
-  font-size: 16px;
+  font-size: var(--font-lg);
   font-weight: 600;
   color: var(--color-text-primary);
 }
 
 .empty__desc {
-  font-size: 13px;
+  font-size: var(--font-sm);
   color: var(--color-text-secondary);
   margin-top: 6px;
 }
 
-/* 终端风格日志查看框 */
-.log-dialog__header-meta {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
+.empty__action {
+  margin-top: 14px;
 }
 
-.log-terminal {
-  background: #0f172a;
-  border-radius: var(--radius-md);
-  padding: 14px 16px;
-  max-height: 480px;
-  overflow-y: auto;
-  border: 1px solid #1e293b;
-}
-
-.log-terminal__code {
-  margin: 0;
-  font-family: "SF Mono", Consolas, Menlo, Monaco, monospace;
-  font-size: 12px;
-  line-height: 1.6;
-  color: #e2e8f0;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-
-.rm-badge__dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  display: inline-block;
+@media (max-width: 768px) {
+  .logs-toolbar__search,
+  .logs-toolbar__date {
+    width: 100%;
+  }
 }
 </style>
