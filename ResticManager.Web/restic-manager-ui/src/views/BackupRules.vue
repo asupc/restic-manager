@@ -11,7 +11,7 @@
       </div>
     </div>
 
-    <el-card shadow="never">
+    <el-card shadow="never" v-loading="loading">
       <el-table :data="rules" style="width: 100%">
         <el-table-column label="名称" min-width="140">
           <template slot-scope="scope">
@@ -57,7 +57,7 @@
 
     <!-- 规则对话框 -->
     <el-dialog :title="editingRule ? '编辑备份规则' : '新建备份规则'" :visible.sync="dialogVisible" width="640px" :close-on-click-modal="false" append-to-body>
-      <el-form :model="ruleForm" label-position="top" ref="ruleForm">
+      <el-form :model="ruleForm" :rules="formRules" label-position="top" ref="ruleForm">
         <el-form-item label="规则名称" prop="name">
           <el-input v-model="ruleForm.name" placeholder="为规则起一个名字,例如: 仅文档"></el-input>
         </el-form-item>
@@ -161,14 +161,29 @@ export default {
   name: 'BackupRules',
   data() {
     return {
+      loading: false,
       saving: false,
       showHelp: false,
       rules: [],
       tasks: [],
       dialogVisible: false,
       editingRule: null,
-      ruleForm: this.defaultForm()
+      ruleForm: this.defaultForm(),
+      formRules: {
+        name: [{ required: true, message: '请输入规则名称', trigger: 'blur' }]
+      }
     };
+  },
+  computed: {
+    ruleTaskCountMap() {
+      const map = {};
+      this.tasks.forEach(t => {
+        if (t.backupRuleId !== null && t.backupRuleId !== undefined) {
+          map[t.backupRuleId] = (map[t.backupRuleId] || 0) + 1;
+        }
+      });
+      return map;
+    }
   },
   mounted() {
     this.loadRules();
@@ -192,26 +207,41 @@ export default {
       };
     },
     async loadRules() {
-      this.rules = await backupRuleService.getAllRules();
+      this.loading = true;
+      try {
+        this.rules = await backupRuleService.getAllRules();
+      } catch (e) {
+        this.$message.error('加载备份规则失败: ' + (e.response?.data?.message || e.message));
+      } finally {
+        this.loading = false;
+      }
     },
     async loadTasks() {
       try { this.tasks = await backupService.getTasks(); }
       catch (e) { this.$message.error('加载任务失败'); }
     },
     taskCountFor(ruleId) {
-      return this.tasks.filter(t => t.backupRuleId === ruleId).length;
+      return this.ruleTaskCountMap[ruleId] || 0;
     },
     createRule() {
       this.editingRule = null;
       this.ruleForm = this.defaultForm();
       this.dialogVisible = true;
+      this.$nextTick(() => { this.$refs.ruleForm && this.$refs.ruleForm.clearValidate(); });
     },
     editRule(rule) {
       this.editingRule = rule;
       this.ruleForm = { ...rule };
       this.dialogVisible = true;
+      this.$nextTick(() => { this.$refs.ruleForm && this.$refs.ruleForm.clearValidate(); });
     },
     async saveRule() {
+      try {
+        const valid = await this.$refs.ruleForm.validate();
+        if (!valid) return;
+      } catch (e) {
+        return;
+      }
       this.saving = true;
       try {
         if (this.editingRule) {

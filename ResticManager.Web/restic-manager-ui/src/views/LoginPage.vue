@@ -102,10 +102,16 @@ export default {
   async mounted() {
     const savedUser = localStorage.getItem('savedUser');
     if (savedUser) {
-      try { this.loginForm = JSON.parse(savedUser); } catch (e) { /* 解析失败忽略 */ }
+      try {
+        const parsed = JSON.parse(savedUser);
+        if (parsed && typeof parsed === 'object') {
+          this.loginForm.username = typeof parsed.username === 'string' ? parsed.username : '';
+          this.loginForm.rememberMe = Boolean(parsed.rememberMe);
+        }
+      } catch (e) { /* 解析失败忽略 */ }
     }
     try {
-      const r = await authService.hasAnyUser();
+      const r = await authService.hasAnyUser({ loading: false });
       this.hasUser = r.hasUser;
     } catch (e) { /* 接口失败忽略,默认有用户 */ }
   },
@@ -120,7 +126,10 @@ export default {
           // 登录接口只返回 token,用输入的用户名维护本地用户信息
           localStorage.setItem('user', JSON.stringify({ username: this.loginForm.username }));
           if (this.loginForm.rememberMe) {
-            localStorage.setItem('savedUser', JSON.stringify(this.loginForm));
+            localStorage.setItem('savedUser', JSON.stringify({
+              username: this.loginForm.username,
+              rememberMe: true
+            }));
           } else {
             localStorage.removeItem('savedUser');
           }

@@ -10,7 +10,7 @@
         <el-button v-if="!compareMode" type="danger" plain size="small" icon="el-icon-delete" @click="openBatchDelete" :disabled="selectedRows.length === 0">
           批量删除{{ selectedRows.length ? `(${selectedRows.length})` : '' }}
         </el-button>
-        <el-button v-if="!compareMode" type="primary" plain size="small" icon="el-icon-compare" @click="enterCompareMode" :disabled="snapshots.length < 2">比较快照</el-button>
+        <el-button v-if="!compareMode" type="primary" plain size="small" icon="el-icon-sort" @click="enterCompareMode" :disabled="snapshots.length < 2">比较快照</el-button>
         <template v-else>
           <el-tag effect="plain" size="small">{{ selectedSnapshots.length }}/2 已选</el-tag>
           <el-button type="success" size="small" icon="el-icon-view" @click="showDiff" :disabled="selectedSnapshots.length !== 2">显示差异</el-button>
@@ -76,7 +76,11 @@
         </el-table-column>
         <el-table-column v-if="compareMode" label="比较" width="55" align="center">
           <template #default="scope">
-            <el-checkbox v-model="scope.row.checked" :disabled="!scope.row.checked && selectedSnapshots.length >= 2" @change="handleSnapshotSelect(scope.row)"></el-checkbox>
+            <el-checkbox
+              :value="isSnapshotSelected(scope.row)"
+              :disabled="!isSnapshotSelected(scope.row) && selectedSnapshots.length >= 2"
+              @change="val => handleSnapshotSelect(scope.row, val)"
+            ></el-checkbox>
           </template>
         </el-table-column>
         <el-table-column label="操作" width="350" fixed="right">
@@ -283,6 +287,7 @@ export default {
       diffResult: null,
       diffError: '',
       diffLoading: false,
+      diffRequestId: 0,
       selectedSnapshots: [],
       restoreForm: { path: '', verify: false },
       diffCurrentPage: 1,
@@ -303,9 +308,16 @@ export default {
     searchKeyword() {
       this.currentPage = 1;
     },
+    diffTypeFilter() {
+      this.diffCurrentPage = 1;
+    },
+    diffSearchKeyword() {
+      this.diffCurrentPage = 1;
+    },
     // 父组件刷新列表后（增删改/同步），清空勾选，避免已删除快照残留在批量删除选择中
     snapshots() {
       this.clearTableSelection();
+      this.selectedSnapshots = [];
     }
   },
   computed: {
@@ -345,7 +357,6 @@ export default {
   beforeDestroy() {
     // 停止本组件在途任务的轮询
     this._destroyed = true;
-    this.snapshots.forEach(s => { if ('checked' in s) this.$delete(s, 'checked'); });
   },
   methods: {
     // 表格勾选变化（reserve-selection 下跨页保留）
@@ -368,29 +379,30 @@ export default {
       this.batchDeleteDialogVisible = false;
       this.clearTableSelection();
     },
+    isSnapshotSelected(snapshot) {
+      return this.selectedSnapshots.some(s => s.id === snapshot.id);
+    },
     enterCompareMode() {
       this.compareMode = true;
-      this.snapshots.forEach(s => this.$set(s, 'checked', false));
       this.selectedSnapshots = [];
     },
     exitCompareMode() {
       this.compareMode = false;
       this.selectedSnapshots = [];
     },
-    handleSnapshotSelect(snapshot) {
-      if (snapshot.checked) {
+    handleSnapshotSelect(snapshot, checked) {
+      if (checked) {
+        if (this.isSnapshotSelected(snapshot)) return;
         if (this.selectedSnapshots.length < 2) {
           if (this.selectedSnapshots.length > 0) {
             const first = this.selectedSnapshots[0];
             if (JSON.stringify(first.paths) !== JSON.stringify(snapshot.paths)) {
-              snapshot.checked = false;
               Message.warning('只能比较路径相同的快照');
               return;
             }
           }
           this.selectedSnapshots.push(snapshot);
         } else {
-          snapshot.checked = false;
           Message.warning('最多选择 2 个快照');
         }
       } else {
@@ -403,7 +415,18 @@ export default {
       this.compareSnapshots(this.selectedSnapshots[0], this.selectedSnapshots[1]);
     },
     onViewFiles(snapshot) {
-      this.$router.push(`/repositories/${this.repositoryId}/snapshots/${snapshot.id}/files?shortId=${snapshot.short_id}&path=${snapshot.paths[0]}`);
+      const firstPath = Array.isArray(snapshot.paths) && snapshot.paths.length > 0 ? snapshot.paths[0] : '';
+      this.$router.push({
+        name: 'SnapshotFiles',
+        params: {
+          repositoryId: this.repositoryId,
+          snapshotId: snapshot.id
+        },
+        query: {
+          shortId: snapshot.short_id || '',
+          path: firstPath
+        }
+      });
     },
     onRestore(snapshot) {
       this.restoreItem = snapshot;
@@ -416,6 +439,7 @@ export default {
       this.deleteDialogVisible = true;
     },
     async compareSnapshots(s1, s2) {
+      const reqId = ++this.diffRequestId;
       this.diffDrawerVisible = true;
       this.diffLoading = true;
       this.diffResult = null;
@@ -427,23 +451,30 @@ export default {
       try {
         res = await repositoryService.diffSnapshots(this.repositoryId, s1.id, s2.id);
       } catch (e) {
+        if (this._destroyed || reqId !== this.diffRequestId) return;
         this.diffLoading = false;
         this.diffError = e.response?.data?.message || e.message || '';
         return;
       }
+      if (this._destroyed || reqId !== this.diffRequestId) return;
       this.$store.dispatch('tasks/noteSubmitted', res.taskId);
       try {
-        const task = await pollTask(res.taskId, { shouldStop: () => this._destroyed });
-        if (this._destroyed) return;
+        const task = await pollTask(res.taskId, {
+          shouldStop: () => this._destroyed || reqId !== this.diffRequestId
+        });
+        if (this._destroyed || reqId !== this.diffRequestId) return;
         if (task.status === 'Succeeded') {
           this.diffResult = task.resultJson ? JSON.parse(task.resultJson) : null;
         } else {
           this.diffError = '差异比较失败: ' + (task.error || '');
         }
       } catch (e) {
+        if (this._destroyed || reqId !== this.diffRequestId) return;
         if (e.message !== 'cancelled') this.diffError = '差异比较失败: ' + (e.message || '');
       } finally {
-        this.diffLoading = false;
+        if (reqId === this.diffRequestId) {
+          this.diffLoading = false;
+        }
       }
     },
     performRestore() {
@@ -480,15 +511,16 @@ export default {
       this.tagList = this.tagList.filter(t => t !== tag);
     },
     async saveTags() {
-      if (!this.tagItem) return;
+      if (!this.tagItem || this.tagSaving) return;
+      this.tagSaving = true;
       let res;
       try {
         res = await repositoryService.setSnapshotTags(this.repositoryId, this.tagItem.id, this.tagList);
       } catch (e) {
+        this.tagSaving = false;
         Message.error(e.response?.data?.message || e.message || '');
         return;
       }
-      this.tagSaving = true;
       this.$store.dispatch('tasks/noteSubmitted', res.taskId);
       try {
         const task = await pollTask(res.taskId, { shouldStop: () => this._destroyed });

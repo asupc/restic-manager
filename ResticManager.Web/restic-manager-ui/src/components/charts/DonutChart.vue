@@ -20,7 +20,7 @@
       <text :x="size/2" :y="size/2 + 16" text-anchor="middle" font-size="11" fill="#64748b">{{ totalLabel }}</text>
     </svg>
     <ul class="rm-donut__legend">
-      <li v-for="(seg, idx) in data" :key="idx">
+      <li v-for="(seg, idx) in segments" :key="idx">
         <span class="rm-donut__dot" :style="{ background: seg.color }"></span>
         <span class="rm-donut__label">{{ seg.label }}</span>
         <span class="rm-donut__value">{{ seg.value }}</span>
@@ -54,13 +54,16 @@ export default {
       let acc = 0;
       return this.data.map((d, idx) => {
         const ratio = this.total ? d.value / this.total : 0;
-        d.percent = Math.round(ratio * 100);
-        d.color = d.color || palette[idx % palette.length];
+        const percent = Math.round(ratio * 100);
+        const color = d.color || palette[idx % palette.length];
         const length = ratio * this.circumference;
         const seg = {
+          label: d.label,
+          value: d.value,
+          percent,
+          color,
           length,
-          offset: acc,
-          color: d.color
+          offset: acc
         };
         acc += length;
         return seg;

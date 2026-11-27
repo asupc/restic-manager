@@ -36,6 +36,9 @@ export default {
   mounted() {
     this.syncTaskPolling();
   },
+  beforeDestroy() {
+    this.$store.dispatch('tasks/stop');
+  },
   watch: {
     '$route'(to) {
       this.syncTaskPolling(to);

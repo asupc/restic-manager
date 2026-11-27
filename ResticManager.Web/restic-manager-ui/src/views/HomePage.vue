@@ -50,7 +50,7 @@
           <div slot="header" class="card-toolbar">
             <div>
               <div class="card-toolbar__title">备份趋势</div>
-              <div class="card-toolbar__sub">最近 14 天每日备份任务结果</div>
+              <div class="card-toolbar__sub">最近 {{ trendRange }} 天每日备份任务结果</div>
             </div>
             <el-radio-group v-model="trendRange" size="mini" @change="rebuildTrend">
               <el-radio-button label="7">7天</el-radio-button>
@@ -291,7 +291,7 @@ export default {
           icon: ICON_SUCCESS,
           trend: `共处理 ${this.totalFiles} 个文件`,
           trendIcon: 'el-icon-document',
-          action: () => this.$router.push('/backup-management')
+          action: () => this.$router.push('/records')
         },
         {
           key: 'storage',
@@ -316,8 +316,16 @@ export default {
     }
   },
   async mounted() {
+    this._rafIds = [];
     this.loadUser();
     await this.fetchDashboardData();
+  },
+  beforeDestroy() {
+    this._destroyed = true;
+    if (this._rafIds && this._rafIds.length) {
+      this._rafIds.forEach(id => cancelAnimationFrame(id));
+      this._rafIds = [];
+    }
   },
   methods: {
     loadUser() {
@@ -338,6 +346,7 @@ export default {
           backupRuleService.getAllRules(),
           repositoryService.getHealthOverview()
         ]);
+        if (this._destroyed) return;
         this.allTasks = tasks;
         this.allRecords = records;
         this.allRepos = repos;
@@ -346,21 +355,27 @@ export default {
 
         this.totalFiles = records.reduce((s, r) => s + (r.filesProcessed || 0), 0);
 
+        const taskMap = new Map(tasks.map(t => [t.id, t]));
+        const repoMap = new Map(repos.map(rr => [rr.id, rr]));
         this.recentTasks = [...records]
           .sort((a, b) => new Date(b.startTime) - new Date(a.startTime))
           .slice(0, 6)
-          .map(r => ({
-            ...r,
-            taskName: tasks.find(t => t.id === r.taskId)?.name || '已删除任务',
-            task: {
-              ...tasks.find(t => t.id === r.taskId),
-              repositoryName: repos.find(rr => rr.id === tasks.find(t => t.id === r.taskId)?.repositoryId)?.name
-            }
-          }));
+          .map(r => {
+            const taskId = r.backupTaskId || r.taskId;
+            const matchedTask = taskMap.get(taskId);
+            const matchedRepo = matchedTask ? repoMap.get(matchedTask.repositoryId) : null;
+            return {
+              ...r,
+              taskName: matchedTask ? matchedTask.name : '已删除任务',
+              task: {
+                ...(matchedTask || {}),
+                repositoryName: matchedRepo ? matchedRepo.name : ''
+              }
+            };
+          });
 
-        const total = tasks.length || 1;
         const enabled = tasks.filter(t => t.isEnabled).length;
-        const disabled = total - enabled;
+        const disabled = tasks.length - enabled;
         const success = records.filter(r => r.status === 'Succeeded').length;
         const failed = records.filter(r => r.status === 'Failed').length;
         this.statusDistribution = [
@@ -403,7 +418,7 @@ export default {
             tone: 'danger', icon: 'el-icon-circle-close',
             title: `最近 24 小时有 ${recentFailed} 次备份失败`,
             desc: '建议查看失败原因',
-            action: () => this.$router.push('/backup-management')
+            action: () => this.$router.push('/records')
           });
         }
         const uninitialized = repos.filter(r => !r.isInitialized);
@@ -446,14 +461,22 @@ export default {
 
         this.rebuildTrend();
         this.loaded = true;
-        this.$nextTick(() => this.animateCounts());
+        this.$nextTick(() => {
+          if (!this._destroyed) this.animateCounts();
+        });
       } catch (err) {
+        if (this._destroyed) return;
         this.$message.error('获取仪表盘数据失败: ' + err.message);
         console.error(err);
         this.loaded = true;
       }
     },
     animateCounts() {
+      if (this._destroyed) return;
+      if (this._rafIds && this._rafIds.length) {
+        this._rafIds.forEach(id => cancelAnimationFrame(id));
+      }
+      this._rafIds = [];
       const reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
       this.statCards.forEach(card => {
         const target = Number(card.value) || 0;
@@ -464,43 +487,64 @@ export default {
         const duration = 800;
         const start = performance.now();
         const step = now => {
+          if (this._destroyed) return;
           const p = Math.min((now - start) / duration, 1);
           // easeOutCubic
           const eased = 1 - Math.pow(1 - p, 3);
           this.$set(this.displayValues, card.key, Math.round(target * eased));
-          if (p < 1) requestAnimationFrame(step);
+          if (p < 1) {
+            const nextId = requestAnimationFrame(step);
+            this._rafIds.push(nextId);
+          }
         };
-        requestAnimationFrame(step);
+        const firstId = requestAnimationFrame(step);
+        this._rafIds.push(firstId);
       });
     },
     rebuildTrend() {
       const days = parseInt(this.trendRange, 10) || 14;
+      const toDateKey = d => {
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+      };
       const now = new Date();
       const buckets = [];
+      const bucketMap = new Map();
       for (let i = days - 1; i >= 0; i--) {
         const d = new Date(now);
         d.setHours(0, 0, 0, 0);
         d.setDate(d.getDate() - i);
-        const next = new Date(d);
-        next.setDate(d.getDate() + 1);
-        const dayRecords = this.allRecords.filter(r => {
-          const t = new Date(r.startTime);
-          return t >= d && t < next;
-        });
-        const success = dayRecords.filter(r => r.status === 'Succeeded').length;
-        const failed = dayRecords.filter(r => r.status === 'Failed').length;
-        buckets.push({
+        const key = toDateKey(d);
+        const bucket = {
+          key,
           label: `${d.getMonth() + 1}/${d.getDate()}`,
-          success,
-          failed
-        });
+          success: 0,
+          failed: 0
+        };
+        buckets.push(bucket);
+        bucketMap.set(key, bucket);
       }
+
+      let totalRunning = 0;
+      for (let i = 0; i < this.allRecords.length; i++) {
+        const r = this.allRecords[i];
+        if (r.status === 'Running') totalRunning++;
+        if (!r.startTime) continue;
+        const t = new Date(r.startTime);
+        if (isNaN(t.getTime())) continue;
+        const bucket = bucketMap.get(toDateKey(t));
+        if (!bucket) continue;
+        if (r.status === 'Succeeded') bucket.success++;
+        else if (r.status === 'Failed') bucket.failed++;
+      }
+
       this.trendLabels = buckets.map(b => b.label);
       this.trendData = buckets.map(b => b.success);
 
       const totalSuccess = buckets.reduce((s, b) => s + b.success, 0);
       const totalFailed = buckets.reduce((s, b) => s + b.failed, 0);
-      const totalRunning = this.allRecords.filter(r => r.status === 'Running').length;
       const total = totalSuccess + totalFailed;
       this.trendSummary = {
         success: totalSuccess,

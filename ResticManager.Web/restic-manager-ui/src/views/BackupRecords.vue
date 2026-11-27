@@ -281,14 +281,40 @@ export default {
   computed: {
     hasActiveFilter() {
       return !!(this.filters.keyword || this.filters.taskId || this.filters.status);
+    },
+    taskMap() {
+      const map = new Map();
+      this.tasks.forEach(t => map.set(t.id, t));
+      return map;
+    },
+    repoMap() {
+      const map = new Map();
+      this.repositories.forEach(r => map.set(r.id, r));
+      return map;
     }
+  },
+  watch: {
+    '$route.query.taskId'(val) {
+      const parsed = this.parseTaskIdQuery(val);
+      if (parsed !== this.filters.taskId) {
+        this.clearFilterTimer();
+        this.filters.taskId = parsed;
+        this.page = 1;
+        this.fetchRecords();
+      }
+    }
+  },
+  created() {
+    this._fetchSeq = 0;
   },
   async mounted() {
     // 支持从路由 query 传参 taskId
-    if (this.$route.query.taskId) {
-      this.filters.taskId = Number(this.$route.query.taskId);
-    }
+    this.filters.taskId = this.parseTaskIdQuery(this.$route.query.taskId);
     await Promise.all([this.fetchMeta(), this.fetchRecords()]);
+  },
+  beforeDestroy() {
+    this._destroyed = true;
+    this.clearFilterTimer();
   },
   methods: {
     async fetchMeta() {
@@ -303,7 +329,19 @@ export default {
         console.error('获取元数据失败', e);
       }
     },
+    parseTaskIdQuery(val) {
+      if (val === undefined || val === null || val === '') return null;
+      const num = Number(val);
+      return Number.isFinite(num) && num > 0 ? num : null;
+    },
+    clearFilterTimer() {
+      if (this.filterTimer) {
+        clearTimeout(this.filterTimer);
+        this.filterTimer = null;
+      }
+    },
     async fetchRecords() {
+      const seq = ++this._fetchSeq;
       this.loading = true;
       try {
         const res = await backupRecordService.getRecordsPaged({
@@ -313,45 +351,55 @@ export default {
           status: this.filters.status || null,
           keyword: this.filters.keyword ? this.filters.keyword.trim() : null
         });
+        if (this._destroyed || seq !== this._fetchSeq) return;
         this.records = res.items || [];
         this.total = res.total || 0;
       } catch (e) {
+        if (this._destroyed || seq !== this._fetchSeq) return;
         Message.error('加载备份记录失败: ' + (e.response?.data?.message || e.message));
       } finally {
-        this.loading = false;
+        if (!this._destroyed && seq === this._fetchSeq) {
+          this.loading = false;
+        }
       }
     },
     handleFilterChange() {
-      if (this.filterTimer) clearTimeout(this.filterTimer);
+      this.clearFilterTimer();
       this.filterTimer = setTimeout(() => {
+        this.filterTimer = null;
+        if (this._destroyed) return;
         this.page = 1;
         this.fetchRecords();
       }, 300);
     },
     resetFilters() {
+      this.clearFilterTimer();
       this.filters = { keyword: '', taskId: null, status: null };
       this.page = 1;
       this.fetchRecords();
     },
     handlePageChange(newPage) {
+      this.clearFilterTimer();
       this.page = newPage;
       this.fetchRecords();
     },
     handleSizeChange(newSize) {
+      this.clearFilterTimer();
       this.pageSize = newSize;
       this.page = 1;
       this.fetchRecords();
     },
     getTaskName(row) {
       if (row.task && row.task.name) return row.task.name;
-      const found = this.tasks.find(t => t.id === (row.backupTaskId || row.taskId));
-      return found ? found.name : `任务 #${row.backupTaskId || row.taskId}`;
+      const taskId = row.backupTaskId || row.taskId;
+      const found = this.taskMap.get(taskId);
+      return found ? found.name : `任务 #${taskId}`;
     },
     getRepoName(row) {
       const taskId = row.backupTaskId || row.taskId;
-      const task = this.tasks.find(t => t.id === taskId);
+      const task = this.taskMap.get(taskId);
       if (task && task.repositoryId) {
-        const repo = this.repositories.find(r => r.id === task.repositoryId);
+        const repo = this.repoMap.get(task.repositoryId);
         return repo ? repo.name : '';
       }
       return '';
@@ -433,6 +481,9 @@ export default {
         });
         await backupRecordService.deleteRecord(row.id);
         Message.success('记录已删除');
+        if (this.records.length === 1 && this.page > 1) {
+          this.page -= 1;
+        }
         await this.fetchRecords();
       } catch (e) {
         if (e !== 'cancel') {

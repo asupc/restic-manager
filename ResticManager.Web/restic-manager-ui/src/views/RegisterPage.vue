@@ -111,7 +111,11 @@ export default {
         if (!valid) return;
         this.isLoading = true;
         try {
-          await authService.register(this.registerForm);
+          await authService.register({
+            username: this.registerForm.username,
+            password: this.registerForm.password,
+            email: this.registerForm.email
+          });
           this.$message.success('注册成功,请登录');
           this.$router.push('/login');
         } catch (e) {
@@ -144,7 +148,7 @@ export default {
 .auth-brand__title { font-size: 36px; font-weight: 700; margin: 0; letter-spacing: -0.02em; }
 .auth-brand__sub { font-size: 16px; opacity: 0.85; margin: 8px 0 32px; }
 .auth-illustration { max-width: 400px; margin-top: 20px; position: relative; z-index: 1; }
-.auth-brand__deco { position: absolute; inset: 0; pointer-events: 0; }
+.auth-brand__deco { position: absolute; inset: 0; pointer-events: none; }
 .auth-brand__deco svg { width: 100%; height: 100%; }
 
 .auth-form {

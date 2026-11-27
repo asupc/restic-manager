@@ -23,6 +23,7 @@
       @restore-snapshot="handleRestoreSnapshot"
       @delete-snapshot="handleDeleteSnapshot"
       @delete-snapshots="handleBatchDeleteSnapshots"
+      @tags-updated="loadSnapshots"
     ></snapshot-list>
 
     <div v-else class="empty">
@@ -39,6 +40,16 @@ import { TASK_TYPES } from '@/services/task.service';
 import { pollTask } from '@/utils/task-poller';
 import SnapshotList from '@/components/SnapshotList.vue';
 
+function safeParseJson(json, fallback = {}) {
+  if (!json) return fallback;
+  try {
+    const parsed = JSON.parse(json);
+    return parsed === null || parsed === undefined ? fallback : parsed;
+  } catch (e) {
+    return fallback;
+  }
+}
+
 export default {
   name: 'BackupManagement',
   components: { SnapshotList },
@@ -50,6 +61,11 @@ export default {
       loading: false,
       syncing: false
     };
+  },
+  created() {
+    this._repoSwitchToken = 0;
+    this._trackedTaskIds = new Set();
+    this._snapshotReqId = 0;
   },
   methods: {
     async fetchRepositories() {
@@ -64,23 +80,36 @@ export default {
       }
     },
     async loadSnapshots() {
-      if (!this.selectedRepository) return;
+      if (!this.selectedRepository) {
+        this.snapshots = [];
+        this.loading = false;
+        return;
+      }
+      const reqId = ++this._snapshotReqId;
       this.loading = true;
       try {
-        this.snapshots = await repositoryService.getSnapshots(this.selectedRepository);
+        const list = await repositoryService.getSnapshots(this.selectedRepository);
+        if (this._destroyed || reqId !== this._snapshotReqId) return;
+        this.snapshots = list;
       } catch (e) {
+        if (this._destroyed || reqId !== this._snapshotReqId) return;
         Message.error('获取快照失败: ' + e.message);
       } finally {
-        this.loading = false;
+        if (!this._destroyed && reqId === this._snapshotReqId) {
+          this.loading = false;
+        }
       }
     },
     // 提交后台任务后轮询到终态并提示；返回任务是否成功
-    async awaitTask(taskId, { loadingFlag = null, label = '操作', successMessage = null } = {}) {
+    async awaitTask(taskId, { loadingFlag = null, label = '操作', successMessage = null, token = this._repoSwitchToken } = {}) {
+      if (this._trackedTaskIds.has(taskId)) return false;
+      this._trackedTaskIds.add(taskId);
+      const myToken = token;
       if (loadingFlag) this[loadingFlag] = true;
       let ok = false;
       try {
-        const task = await pollTask(taskId, { shouldStop: () => this._destroyed });
-        if (this._destroyed) return false;
+        const task = await pollTask(taskId, { shouldStop: () => this._destroyed || myToken !== this._repoSwitchToken });
+        if (this._destroyed || myToken !== this._repoSwitchToken) return false;
         ok = task.status === 'Succeeded';
         if (ok) {
           Message.success(successMessage ? successMessage(task) : label + '完成');
@@ -88,9 +117,13 @@ export default {
           Message.error(label + '失败: ' + (task.error || ''));
         }
       } catch (e) {
+        if (this._destroyed || myToken !== this._repoSwitchToken) return false;
         if (e.message !== 'cancelled') Message.error(label + '失败: ' + (e.message || ''));
       } finally {
-        if (loadingFlag) this[loadingFlag] = false;
+        if (myToken === this._repoSwitchToken) {
+          this._trackedTaskIds.delete(taskId);
+          if (loadingFlag) this[loadingFlag] = false;
+        }
       }
       return ok;
     },
@@ -109,7 +142,7 @@ export default {
         loadingFlag: 'syncing',
         label: '同步',
         successMessage: (task) => {
-          const r = task.resultJson ? JSON.parse(task.resultJson) : {};
+          const r = safeParseJson(task.resultJson, {});
           const n = v => (v === null || v === undefined ? 0 : v);
           return `同步完成: 新增 ${n(r.added)}、更新 ${n(r.updated)}、标记已删除 ${n(r.markedDeleted)}（远端共 ${n(r.remoteTotal)} 条）`;
         }
@@ -144,7 +177,7 @@ export default {
         label: '删除',
         // resultJson 带 localCacheWarning 时说明远端已删但本地缓存更新失败
         successMessage: (task) => {
-          const r = task.resultJson ? JSON.parse(task.resultJson) : {};
+          const r = safeParseJson(task.resultJson, {});
           return r.localCacheWarning ? '快照已删除；' + r.localCacheWarning : '快照已删除';
         }
       });
@@ -164,7 +197,7 @@ export default {
       const ok = await this.awaitTask(res.taskId, {
         label: '批量删除',
         successMessage: (task) => {
-          const r = task.resultJson ? JSON.parse(task.resultJson) : {};
+          const r = safeParseJson(task.resultJson, {});
           const n = v => (v === null || v === undefined ? 0 : v);
           let msg = `批量删除完成: 远端删除 ${n(r.deleted)} 个，本地标记 ${n(r.markedDeleted)} 个`;
           if (r.localCacheWarning) msg += '；' + r.localCacheWarning;
@@ -175,18 +208,31 @@ export default {
     },
     // 切换仓库 / 页面重新进入时，恢复该仓库仍在执行的后台任务的轮询
     resumeActiveTasks() {
+      if (!this.selectedRepository) return;
+      const token = this._repoSwitchToken;
       const active = this.$store.getters['tasks/activeByRepository'](this.selectedRepository);
       active.forEach(t => {
+        if (this._trackedTaskIds.has(t.id)) return;
         switch (t.type) {
           case TASK_TYPES.SnapshotSync:
-            this.awaitTask(t.id, { loadingFlag: 'syncing', label: '同步' })
-              .then(ok => { if (ok) this.loadSnapshots(); });
+            this.awaitTask(t.id, { loadingFlag: 'syncing', label: '同步', token })
+              .then(ok => {
+                if (ok && !this._destroyed && token === this._repoSwitchToken) {
+                  this.loadSnapshots();
+                }
+              });
             break;
           case TASK_TYPES.SnapshotRestore:
+          case TASK_TYPES.FileRestore:
           case TASK_TYPES.SnapshotDelete:
+          case TASK_TYPES.SnapshotBatchDelete:
           case TASK_TYPES.SnapshotTagSet:
-            this.awaitTask(t.id, { label: t.title || '操作' })
-              .then(() => this.loadSnapshots());
+            this.awaitTask(t.id, { label: t.title || '操作', token })
+              .then(() => {
+                if (!this._destroyed && token === this._repoSwitchToken) {
+                  this.loadSnapshots();
+                }
+              });
             break;
           default:
             break;
@@ -195,18 +241,22 @@ export default {
     }
   },
   watch: {
-    // 切换仓库时恢复该仓库的在途任务跟踪
+    // 切换仓库时取消旧仓库轮询、清空旧快照并恢复新仓库的在途任务跟踪
     selectedRepository() {
+      this._repoSwitchToken += 1;
+      this._trackedTaskIds = new Set();
+      this.syncing = false;
+      this.snapshots = [];
       this.resumeActiveTasks();
     }
   },
   async mounted() {
     await this.fetchRepositories();
-    this.resumeActiveTasks();
   },
   beforeDestroy() {
     // 停止本页所有在途任务的轮询
     this._destroyed = true;
+    this._repoSwitchToken += 1;
   }
 };
 </script>

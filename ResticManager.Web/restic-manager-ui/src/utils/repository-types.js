@@ -177,21 +177,24 @@ export function parseLocation(type, path) {
         case 'rest':
             return path.startsWith('rest:') ? { url: path.slice(5) } : null;
         case 's3': {
-            const rest = path.replace(/^s3:/, '');
+            if (!path.startsWith(type + ':')) return null;
+            const rest = path.slice(type.length + 1);
             // endpoint 可带 scheme（http://localhost:9000），host 之后第一个 / 起为 bucket（可含子路径）
             const m = rest.match(/^(https?:\/\/)?([^/]+)(\/.+)$/);
             if (!m) return null;
             return { endpoint: (m[1] || '') + m[2], bucket: m[3].replace(/^\/+/, '') };
         }
         case 'b2': {
-            const rest = path.replace(/^b2:/, '');
+            if (!path.startsWith(type + ':')) return null;
+            const rest = path.slice(type.length + 1);
             const idx = rest.indexOf(':');
             if (idx < 0) return rest ? { bucket: rest } : null;
             return { bucket: rest.slice(0, idx), path: rest.slice(idx + 1) };
         }
         case 'azure':
         case 'gs': {
-            const rest = path.replace(new RegExp('^' + type + ':'), '');
+            if (!path.startsWith(type + ':')) return null;
+            const rest = path.slice(type.length + 1);
             const idx = rest.indexOf(':');
             if (idx < 0) return rest ? { bucket: rest, container: rest, path: '' } : null;
             const bucket = rest.slice(0, idx);

@@ -27,7 +27,6 @@
         lazy
         :load="loadSubdirectory"
         size="small"
-        default-expand-all
         :row-class-name="'file-row'"
         :cell-class-name="'file-cell-tight'"
       >
@@ -114,9 +113,7 @@ export default {
     filteredFiles() {
       if (!this.searchKeyword) return this.files;
       const q = this.searchKeyword.toLowerCase();
-      const filter = arr => arr.filter(f => f.name.toLowerCase().includes(q) || (f.children && f.children.length));
-      // 简单筛选:不递归子节点
-      return this.files.filter(f => f.name.toLowerCase().includes(q));
+      return this.files.filter(f => (f.name || '').toLowerCase().includes(q));
     }
   },
   methods: {
@@ -152,7 +149,7 @@ export default {
         this.snapshotShortId = this.$route.query.shortId || snapshotId.substring(0, 8);
         this.currentPath = this.$route.query.path || '';
         this.repository = await repositoryService.getRepository(repositoryId);
-        const nodes = await this.fetchTreeNodes(repositoryId, snapshotId, this.$route.query.path);
+        const nodes = await this.fetchTreeNodes(repositoryId, snapshotId, this.currentPath);
         if (nodes !== null) this.files = nodes;
       } catch (e) {
         Message.error('加载文件失败: ' + e.message);
@@ -187,17 +184,22 @@ export default {
     async performRestore() {
       const repositoryId = this.$route.params.repositoryId;
       const snapshotId = this.$route.params.snapshotId;
-      if (!this.repository || !this.restoreItem) return;
-      let res;
-      try {
-        res = await repositoryService.restoreFile(repositoryId, snapshotId, this.restoreItem.path, this.restoreForm.path, this.restoreForm.verify);
-      } catch (e) {
-        Message.error(e.response?.data?.message || e.message || '');
+      if (!this.repository || !this.restoreItem || this.restoring) return;
+      const targetPath = (this.restoreForm.path || '').trim();
+      if (!targetPath) {
+        Message.warning('请选择恢复目标目录');
         return;
       }
       this.restoring = true;
-      this.$store.dispatch('tasks/noteSubmitted', res.taskId);
       try {
+        let res;
+        try {
+          res = await repositoryService.restoreFile(repositoryId, snapshotId, this.restoreItem.path, targetPath, this.restoreForm.verify);
+        } catch (e) {
+          Message.error(e.response?.data?.message || e.message || '');
+          return;
+        }
+        this.$store.dispatch('tasks/noteSubmitted', res.taskId);
         const task = await pollTask(res.taskId, { shouldStop: () => this._destroyed });
         if (this._destroyed) return;
         if (task.status === 'Succeeded') {

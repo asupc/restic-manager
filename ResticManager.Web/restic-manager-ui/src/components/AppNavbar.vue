@@ -162,22 +162,30 @@ export default {
     }
   },
   watch: {
-    '$route'() {
-      this.loadUser();
+    '$route'(to, from) {
+      if (from && (from.path === '/login' || from.path === '/register')) {
+        this.loadUser();
+      }
     }
   },
   methods: {
     loadUser() {
+      const raw = localStorage.getItem('user');
+      if (raw === this._lastUserRaw) return;
+      this._lastUserRaw = raw;
+      if (!raw) {
+        this.userName = '用户';
+        this.avatarLetter = 'U';
+        return;
+      }
       try {
-        const raw = localStorage.getItem('user');
-        if (raw) {
-          const user = JSON.parse(raw);
-          this.userName = user.username || user.name || '用户';
-          this.avatarLetter = (this.userName || 'U').charAt(0).toUpperCase();
-        }
+        const user = JSON.parse(raw);
+        this.userName = (user && (user.username || user.name)) || '用户';
+        this.avatarLetter = (this.userName || 'U').charAt(0).toUpperCase();
       } catch (e) {
         // 清理历史遗留的非法值(如字符串 "undefined"),避免控制台反复报错
         localStorage.removeItem('user');
+        this._lastUserRaw = null;
       }
     },
     isActive(path) {
@@ -185,8 +193,8 @@ export default {
       return this.$route.path.startsWith(path);
     },
     quickAction(type) {
-      if (type === 'addTask') this.$router.push('/tasks?action=new');
-      else if (type === 'addRepo') this.$router.push('/repositories?action=new');
+      if (type === 'addTask') this.$router.push('/tasks?action=new').catch(() => {});
+      else if (type === 'addRepo') this.$router.push('/repositories?action=new').catch(() => {});
     },
     handleUserCmd(cmd) {
       if (cmd === 'logout') return this.confirmLogout();
@@ -209,7 +217,8 @@ export default {
         // 停止后台任务全局轮询
         this.$store.dispatch('tasks/stop');
         authService.logout();
-        this.$router.push('/login');
+        this._lastUserRaw = null;
+        this.$router.push('/login').catch(() => {});
       }).catch(() => {});
     }
   }

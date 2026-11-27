@@ -1,5 +1,7 @@
 import api from "./api";
 
+let hasUserCached = false;
+
 export const authService = {
   login: async (username, password) => {
     const response = await api.post("/auth/login", { username, password });
@@ -22,9 +24,15 @@ export const authService = {
   isAuthenticated: () => {
     return !!localStorage.getItem("token");
   },
-  
+
   hasAnyUser: async () => {
-    const response = await api.get("/auth/has-user");
+    if (hasUserCached) {
+      return { hasUser: true };
+    }
+    const response = await api.get("/auth/has-user", { loading: false });
+    if (response.data && response.data.hasUser === true) {
+      hasUserCached = true;
+    }
     return response.data;
   }
 };

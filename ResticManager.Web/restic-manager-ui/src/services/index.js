@@ -1,4 +1,4 @@
-export { api } from './api'
+export { default as api } from './api'
 export { authService } from './auth.service'
 export { backupService } from './backup.service'
 export { backupRecordService } from './backup-record.service'

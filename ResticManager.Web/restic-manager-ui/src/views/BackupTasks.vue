@@ -212,12 +212,12 @@
         </el-row>
 
         <el-form-item label="计划 (Cron)">
-          <el-input v-model="form.cronExpression" placeholder="例如: 0 0 * * * (每天凌晨执行)" size="default"></el-input>
+          <el-input v-model="form.cronExpression" placeholder="例如: 0 0 0 * * ? (每天凌晨执行)" size="default"></el-input>
           <div class="form-tip">
-            <i class="el-icon-info"></i> 使用 Cron 表达式设置自动备份,留空表示手动执行。常用:
-            <el-tag size="mini" effect="plain" class="cron-quick" @click="form.cronExpression = '0 0 * * *'">每天 0 点</el-tag>
-            <el-tag size="mini" effect="plain" class="cron-quick" @click="form.cronExpression = '0 */6 * * *'">每 6 小时</el-tag>
-            <el-tag size="mini" effect="plain" class="cron-quick" @click="form.cronExpression = '0 0 * * 0'">每周日</el-tag>
+            <i class="el-icon-info"></i> 使用 6 段 Quartz Cron 表达式设置自动备份,留空表示手动执行。常用:
+            <el-tag size="mini" effect="plain" class="cron-quick" @click="form.cronExpression = '0 0 0 * * ?'">每天 0 点</el-tag>
+            <el-tag size="mini" effect="plain" class="cron-quick" @click="form.cronExpression = '0 0 */6 * * ?'">每 6 小时</el-tag>
+            <el-tag size="mini" effect="plain" class="cron-quick" @click="form.cronExpression = '0 0 0 ? * SUN'">每周日</el-tag>
           </div>
         </el-form-item>
       </el-form>
@@ -304,15 +304,15 @@
     <el-drawer :title="`${currentTaskName} · 文件结构`" :visible.sync="fileDrawerVisible" direction="rtl" size="800px" append-to-body>
       <div class="drawer-content">
         <el-alert v-if="currentExcludePatterns" :title="'排除规则: ' + currentExcludePatterns" type="info" show-icon :closable="false" style="margin-bottom: 12px;"></el-alert>
-        <div class="file-browser">
-          <el-tree ref="fileTree" :data="fileTreeData" :props="fileTreeProps" :load="loadTreeNode" lazy node-key="path" :expand-on-click-node="false" :highlight-current="true">
+        <div class="file-browser" v-loading="fileTreeLoading">
+          <el-tree v-if="fileDrawerVisible && fileTreeReady" ref="fileTree" :key="currentTaskId + ':' + fileTreeVersion" :props="fileTreeProps" :load="loadTreeNode" lazy node-key="path" :expand-on-click-node="false" :highlight-current="true">
             <span class="custom-tree-node" slot-scope="{ node, data }">
               <span :class="{ 'excluded-file': data.isExcluded }">
                 <i :class="data.icon"></i> {{ node.label }}
               </span>
             </span>
           </el-tree>
-          <div v-if="fileTreeData.length === 0" class="empty empty--small">
+          <div v-if="fileTreeReady && !fileTreeLoading && fileTreeData.length === 0" class="empty empty--small">
             <div class="empty__title">该目录下没有文件</div>
           </div>
         </div>
@@ -382,6 +382,11 @@ export default {
       },
       fileDrawerVisible: false,
       fileTreeData: [],
+      fileTreeVersion: 0,
+      fileTreeReady: false,
+      fileTreeLoading: false,
+      browseReqSeq: 0,
+      drawerReqSeq: 0,
       fileTreeProps: {
         label: 'name',
         children: 'children',
@@ -444,8 +449,8 @@ export default {
     // 让"上次结果"徽章及时从 运行中 翻转到 成功/失败
     activeRunIds(newVal, oldVal) {
       if (!oldVal) return;
-      if (newVal.length < oldVal.length) {
-        this.fetchTasks();
+      if (oldVal.some(id => !newVal.includes(id))) {
+        this.fetchTasks().catch(() => {});
       }
     }
   },
@@ -478,15 +483,21 @@ export default {
       this.editingTask = null;
       this.form = { name: '', sourcePath: '', repositoryId: null, backupRuleId: null, cronExpression: '', isEnabled: true };
       this.dialogVisible = true;
+      this.$nextTick(() => { this.$refs.formRef && this.$refs.formRef.clearValidate(); });
     },
     openEditDialog(task) {
       this.editingTask = task;
       this.form = { ...task };
       this.dialogVisible = true;
+      this.$nextTick(() => { this.$refs.formRef && this.$refs.formRef.clearValidate(); });
     },
     async saveTask() {
-      const valid = await this.$refs.formRef.validate();
-      if (!valid) return;
+      try {
+        const valid = await this.$refs.formRef.validate();
+        if (!valid) return;
+      } catch (e) {
+        return;
+      }
       this.saving = true;
       try {
         if (this.editingTask) {
@@ -551,18 +562,23 @@ export default {
     },
     async fetchDrawerRecords() {
       if (!this.currentTaskId) return;
+      const reqSeq = ++this.drawerReqSeq;
       this.drawerLoading = true;
       try {
         const res = await backupRecordService.getRecordsByTaskIdPaged(this.currentTaskId, {
           page: this.drawerPage,
           pageSize: this.drawerPageSize
         });
+        if (reqSeq !== this.drawerReqSeq) return;
         this.drawerRecords = res.items || [];
         this.drawerTotal = res.total || 0;
       } catch (e) {
+        if (reqSeq !== this.drawerReqSeq) return;
         Message.error('加载执行记录失败: ' + (e.response?.data?.message || e.message));
       } finally {
-        this.drawerLoading = false;
+        if (reqSeq === this.drawerReqSeq) {
+          this.drawerLoading = false;
+        }
       }
     },
     handleDrawerPageChange(page) {
@@ -629,29 +645,25 @@ export default {
       return m[s] || (s || '未运行');
     },
     async browseFiles(task) {
+      const reqSeq = ++this.browseReqSeq;
       this.currentTaskId = task.id;
       this.currentTaskName = task.name;
       this.currentSourcePath = task.sourcePath;
       this.fileDrawerVisible = true;
+      this.fileTreeReady = false;
+      this.fileTreeLoading = true;
       this.currentExcludePatterns = '';
       this.fileTreeData = [];
       if (task.backupRuleId) {
         try {
           const rule = await backupRuleService.getRuleById(task.backupRuleId);
+          if (reqSeq !== this.browseReqSeq) return;
           this.currentExcludePatterns = rule.excludePatterns;
         } catch (e) { /* 忽略规则加载错误,继续浏览 */ }
       }
-      await this.loadRootFiles();
-    },
-    async loadRootFiles() {
-      try {
-        const response = await backupService.getFolders(this.currentSourcePath);
-        this.fileTreeData = Array.isArray(response)
-          ? response.map(item => this.createTreeNode(item, this.currentSourcePath))
-          : [];
-      } catch (error) {
-        this.fileTreeData = [];
-      }
+      if (reqSeq !== this.browseReqSeq) return;
+      this.fileTreeVersion += 1;
+      this.fileTreeReady = true;
     },
     createTreeNode(item, parentPath) {
       let fullPath;
@@ -675,13 +687,39 @@ export default {
       };
     },
     async loadTreeNode(node, resolve) {
-      if (node.level === 0) return resolve(this.fileTreeData);
+      const reqSeq = this.browseReqSeq;
+      if (node.level === 0) {
+        if (!this.currentSourcePath) {
+          this.fileTreeData = [];
+          this.fileTreeLoading = false;
+          return resolve([]);
+        }
+        this.fileTreeLoading = true;
+        try {
+          const response = await backupService.getFolders(this.currentSourcePath);
+          if (reqSeq !== this.browseReqSeq) return resolve([]);
+          const nodes = Array.isArray(response)
+            ? response.map(item => this.createTreeNode(item, this.currentSourcePath))
+            : [];
+          this.fileTreeData = nodes;
+          resolve(nodes);
+        } catch (error) {
+          if (reqSeq === this.browseReqSeq) this.fileTreeData = [];
+          resolve([]);
+        } finally {
+          if (reqSeq === this.browseReqSeq) this.fileTreeLoading = false;
+        }
+        return;
+      }
       const path = node.data.path;
       try {
         const response = await backupService.getFolders(path);
-        resolve(response.map(item => this.createTreeNode(item, path)));
+        if (reqSeq !== this.browseReqSeq) return resolve([]);
+        resolve(Array.isArray(response) ? response.map(item => this.createTreeNode(item, path)) : []);
       } catch (e) {
-        Message.error('加载子目录失败: ' + (e.response?.data?.message || e.message));
+        if (reqSeq === this.browseReqSeq) {
+          Message.error('加载子目录失败: ' + (e.response?.data?.message || e.message));
+        }
         resolve([]);
       }
     },

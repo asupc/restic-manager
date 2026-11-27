@@ -32,7 +32,7 @@
                 </el-table-column>
                 <el-table-column label="快照数" width="100" align="center">
                     <template slot-scope="scope">
-                        {{ scope.row.stats?.snapshots_count || '-' }}
+                        {{ scope.row.stats && scope.row.stats.snapshots_count !== undefined && scope.row.stats.snapshots_count !== null ? scope.row.stats.snapshots_count : '-' }}
                     </template>
                 </el-table-column>
                 <el-table-column label="大小" width="120" align="right">
@@ -42,7 +42,7 @@
                 </el-table-column>
                 <el-table-column label="文件数" width="100" align="right">
                     <template slot-scope="scope">
-                        {{ scope.row.stats?.total_file_count || '-' }}
+                        {{ scope.row.stats && scope.row.stats.total_file_count !== undefined && scope.row.stats.total_file_count !== null ? scope.row.stats.total_file_count : '-' }}
                     </template>
                 </el-table-column>
                 <el-table-column label="创建时间" width="170">
@@ -114,8 +114,8 @@
                     </el-col>
                 </el-row>
 
-                <el-form-item label="仓库加密密码" prop="password">
-                    <el-input v-model="form.password" type="password" show-password placeholder="设置仓库加密密码" autocomplete="new-password"></el-input>
+                <el-form-item label="仓库加密密码" prop="password" :required="!editingRepository">
+                    <el-input v-model="form.password" type="password" show-password :placeholder="editingRepository ? '留空则不修改密码' : '设置仓库加密密码'" autocomplete="new-password"></el-input>
                     <div class="form-tip"><i class="el-icon-warning"></i> 密码用于加密所有备份数据,<b>请务必牢记</b>,丢失后将无法恢复数据;与 REST Server 等后端认证密码相互独立</div>
                 </el-form-item>
             </el-form>
@@ -145,6 +145,13 @@ export default {
     name: 'Repositories',
     components: { FolderSelector },
     data() {
+        const validatePassword = (rule, value, callback) => {
+            if (!this.editingRepository && (!value || !String(value).trim())) {
+                callback(new Error('请输入仓库密码'));
+            } else {
+                callback();
+            }
+        };
         return {
             loading: false,
             saving: false,
@@ -159,7 +166,7 @@ export default {
             typeParseFailed: false,
             rules: {
                 name: [{ required: true, message: '请输入仓库名称', trigger: 'blur' }],
-                password: [{ required: true, message: '请输入仓库密码', trigger: 'blur' }]
+                password: [{ validator: validatePassword, trigger: 'blur' }]
             }
         };
     },
@@ -203,6 +210,13 @@ export default {
         resumeActiveTasks() {
             const active = this.$store.getters['tasks/activeTasks'];
             if (!active.length) return;
+            const maintenanceMap = {
+                [TASK_TYPES.RepositoryUnlock]: { cmd: 'unlock', title: '解锁仓库' },
+                [TASK_TYPES.RepositoryPrune]: { cmd: 'prune', title: '清理未引用数据' },
+                [TASK_TYPES.RepositoryDeepCheck]: { cmd: 'deep-check', title: '深度校验' },
+                [TASK_TYPES.RepositoryRepairIndex]: { cmd: 'repair-index', title: '修复索引' },
+                [TASK_TYPES.RepositoryRepairSnapshots]: { cmd: 'repair-snapshots', title: '修复损坏快照' }
+            };
             this.repositories.forEach(repo => {
                 active
                     .filter(t => t.repositoryId === repo.id)
@@ -210,6 +224,15 @@ export default {
                         if (t.type === TASK_TYPES.RepositoryInitialize) this.trackTask(t.id, repo, 'initializing', 'init');
                         else if (t.type === TASK_TYPES.RepositoryCheck) this.trackTask(t.id, repo, 'validating', 'check');
                         else if (t.type === TASK_TYPES.RepositoryStats) this.trackTask(t.id, repo, 'loadingStats', 'stats');
+                        else if (maintenanceMap[t.type]) {
+                            const m = maintenanceMap[t.type];
+                            this.$set(repo, 'maintenanceCmd', m.cmd);
+                            this.trackTask(t.id, repo, 'maintenanceLoading', 'maintenance', m.title).finally(() => {
+                                const currentRepo = this.repositories.find(r => r.id === repo.id);
+                                if (currentRepo) this.$set(currentRepo, 'maintenanceCmd', null);
+                                if (repo && repo !== currentRepo) this.$set(repo, 'maintenanceCmd', null);
+                            });
+                        }
                     });
             });
         },
@@ -227,20 +250,31 @@ export default {
         },
         // 轮询单个后台任务直到终态并提示结果（title 用于运维类任务，成功/失败提示都以它命名）
         async trackTask(taskId, repo, flag, kind, title = null) {
+            const repoId = repo.id;
             this.$set(repo, flag, true);
             try {
                 const task = await pollTask(taskId, { shouldStop: () => this._destroyed });
                 if (this._destroyed) return;
-                const result = task.resultJson ? JSON.parse(task.resultJson) : null;
+                let result = null;
+                if (task.resultJson) {
+                    try { result = JSON.parse(task.resultJson); } catch (e) { result = null; }
+                }
+                const targetRepo = this.repositories.find(r => r.id === repoId) || repo;
                 if (task.status === 'Succeeded') {
                     if (title) Message.success(title + '完成');
-                    else if (kind === 'init') Message.success('仓库初始化成功');
-                    else if (kind === 'check') {
-                        if (result && result.status === 'Passed') Message.success('仓库结构有效');
-                        else Message.error('仓库结构验证失败');
+                    else if (kind === 'init') {
+                        this.$set(targetRepo, 'isInitialized', true);
+                        Message.success('仓库初始化成功');
+                    } else if (kind === 'check') {
+                        if (result && result.status === 'Passed') {
+                            this.$set(targetRepo, 'isInitialized', true);
+                            Message.success('仓库结构有效');
+                        } else {
+                            Message.error('仓库结构验证失败');
+                        }
                     } else if (kind === 'stats' && result) {
-                        this.$set(repo, 'stats', result);
-                        this.$set(repo, 'statsUpdatedAt', task.endTime);
+                        this.$set(targetRepo, 'stats', result);
+                        this.$set(targetRepo, 'statsUpdatedAt', task.endTime);
                     }
                 } else {
                     const label = title ? title + '失败' : kind === 'init' ? '初始化失败' : kind === 'check' ? '校验失败' : '统计失败';
@@ -249,7 +283,9 @@ export default {
             } catch (e) {
                 if (e.message !== 'cancelled') Message.error(e.response?.data?.message || e.message);
             } finally {
-                this.$set(repo, flag, false);
+                const currentRepo = this.repositories.find(r => r.id === repoId);
+                if (currentRepo) this.$set(currentRepo, flag, false);
+                if (repo && repo !== currentRepo) this.$set(repo, flag, false);
             }
         },
         // 切换类型时按新类型元数据重置动态字段（整体替换保持 Vue 2 响应式）
@@ -274,7 +310,11 @@ export default {
             try {
                 const valid = await this.$refs.formRef.validate();
                 if (!valid) return;
+            } catch (e) {
+                return;
+            }
 
+            try {
                 // 拼装完整 location；local 直接取路径，其余类型按结构化字段生成
                 const path = this.form.type === 'local'
                     ? (this.form.locationFields.path || '').trim()
@@ -297,6 +337,10 @@ export default {
                     password: this.form.password,
                     credentialsJson: Object.keys(cred).length ? JSON.stringify(cred) : null
                 };
+                if (this.editingRepository) {
+                    payload.id = this.editingRepository.id;
+                    payload.isInitialized = this.editingRepository.isInitialized;
+                }
 
                 this.saving = true;
                 if (this.editingRepository) {
@@ -309,6 +353,7 @@ export default {
                 this.dialogVisible = false;
                 await this.fetchRepositories();
             } catch (error) {
+                if (error === false) return;
                 Message.error(error.response?.data?.message || error.message);
             } finally {
                 this.saving = false;
@@ -359,8 +404,13 @@ export default {
 
             // maintenanceCmd 标记当前跑的是哪一项，模板据此只在被点的按钮上转圈
             this.$set(repo, 'maintenanceCmd', command);
-            await this.submitAndTrack(repo, 'maintenanceLoading', 'maintenance', meta.fn, meta.title);
-            this.$set(repo, 'maintenanceCmd', null);
+            try {
+                await this.submitAndTrack(repo, 'maintenanceLoading', 'maintenance', meta.fn, meta.title);
+            } finally {
+                const currentRepo = this.repositories.find(r => r.id === repo.id);
+                if (currentRepo) this.$set(currentRepo, 'maintenanceCmd', null);
+                if (repo && repo !== currentRepo) this.$set(repo, 'maintenanceCmd', null);
+            }
         },
         viewSnapshots(repo) {
             this.$router.push(`/repositories/${repo.id}/snapshots`);

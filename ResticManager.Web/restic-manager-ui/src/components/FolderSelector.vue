@@ -58,7 +58,7 @@ export default {
     return {
       dialogVisible: false,
       currentPath: '',
-      selectedPath: '', // 添加selectedPath到data中
+      selectedPath: '',
       folders: []
     };
   },
@@ -79,7 +79,6 @@ export default {
   watch: {
     value: {
       handler(newVal) {
-        console.log('FolderSelector value changed:', newVal);
         this.selectedPath = newVal || '';
         // 同时更新currentPath以确保在打开对话框时显示正确的路径
         if (!this.dialogVisible) {
@@ -87,19 +86,11 @@ export default {
         }
       },
       immediate: true
-    },
-
-    currentPath: {
-      handler(newVal) {
-        // 保持value与currentPath同步
-        this.$emit('input', newVal);
-      }
     }
   },
 
   mounted() {
     // 组件挂载时确保路径正确初始化
-    console.log('FolderSelector mounted, value:', this.value);
     if (this.value) {
       this.selectedPath = this.value;
       this.currentPath = this.value;
@@ -117,9 +108,7 @@ export default {
     openDialog() {
       this.dialogVisible = true;
       // 确保使用传入的value作为初始路径
-      console.log('打开对话框，当前value:', this.value, 'selectedPath:', this.selectedPath, 'currentPath:', this.currentPath);
       this.currentPath = this.value || this.selectedPath || '';
-      // 如果currentPath为空但value不为空，使用value
       if (!this.currentPath && this.value) {
         this.currentPath = this.value;
       }
@@ -130,9 +119,9 @@ export default {
       // 标准化路径分隔符
       if (!path) return path;
 
-      // Windows驱动器根目录特殊处理
+      // Windows驱动器根目录特殊处理（path 已含冒号，如 D: -> D:\）
       if (path.match(/^[a-zA-Z]:$/)) {
-        return path + ':\\';
+        return path + '\\';
       }
 
       // Windows路径处理
@@ -146,15 +135,22 @@ export default {
       return path.replace(/\\/g, '/');
     },
 
-    async loadFolders() {
-      const response = await backupService.getFolders(this.currentPath);
-      this.folders = response.map(item => ({
-        name: item.name,
-        type: item.type // folder, file or drive
-      }));
+    async loadFolders(fallbackPath) {
+      try {
+        const response = await backupService.getFolders(this.currentPath);
+        this.folders = (response || []).map(item => ({
+          name: item.name,
+          type: item.type // folder, file or drive
+        }));
+      } catch (e) {
+        if (fallbackPath !== undefined) {
+          this.currentPath = fallbackPath;
+        }
+      }
     },
 
     enterFolder(row) {
+      const prevPath = this.currentPath;
       if (row.type === 'folder') {
         // 处理文件夹路径
         if (this.currentPath) {
@@ -163,14 +159,14 @@ export default {
             this.currentPath = this.currentPath + row.name;
           } else if (this.currentPath.includes('\\')) {
             // Windows路径
-            this.currentPath = this.currentPath + '\\' + row.name;
+            this.currentPath = this.currentPath.replace(/\\+$/, '') + '\\' + row.name;
           } else {
             // Unix/Linux路径
             // 如果当前路径是根目录(/)，则不需要再添加/
             if (this.currentPath === '/') {
               this.currentPath = this.currentPath + row.name;
             } else {
-              this.currentPath = this.currentPath + '/' + row.name;
+              this.currentPath = this.currentPath.replace(/\/+$/, '') + '/' + row.name;
             }
           }
         } else {
@@ -181,60 +177,65 @@ export default {
             this.currentPath = row.name;
           }
         }
-        this.loadFolders();
+        this.loadFolders(prevPath);
       } else if (row.type === 'drive') {
         this.currentPath = row.name;
-        this.loadFolders();
+        this.loadFolders(prevPath);
       }
     },
 
     goUp() {
+      const prevPath = this.currentPath;
       if (this.currentPath) {
-        // 处理Windows驱动器情况
-        if (this.currentPath.match(/^[a-zA-Z]:\\$/) || this.currentPath.match(/^[a-zA-Z]:$/)) {
-          // 在Windows根目录（驱动器列表）
+        // 处理Windows驱动器根目录情况（如 D:\ 或 D:）
+        if (this.currentPath.match(/^[a-zA-Z]:\\?$/)) {
+          // 返回Windows驱动器列表
           this.currentPath = '';
-          this.loadFolders();
+          this.loadFolders(prevPath);
           return;
         }
 
         // 处理Windows路径
         if (this.currentPath.includes('\\')) {
-          // Windows路径处理
-          const parts = this.currentPath.split('\\');
-          if (parts.length > 1 && parts[parts.length - 1] !== '') {
-            parts.pop();
-            this.currentPath = parts.join('\\');
-            // 确保驱动器路径格式正确
-            if (this.currentPath.match(/^[a-zA-Z]:$/)) {
-              this.currentPath += '\\';
-            }
-          } else if (parts.length > 1 && parts[parts.length - 1] === '') {
-            // D:\folder -> D:\
-            this.currentPath = parts[0] + ':\\';
-          } else {
-            // 返回到驱动器根目录
+          const trimmed = this.currentPath.replace(/\\+$/, '');
+          if (trimmed.match(/^[a-zA-Z]:$/)) {
             this.currentPath = '';
+          } else {
+            const parts = trimmed.split('\\');
+            if (parts.length > 1) {
+              parts.pop();
+              let parent = parts.join('\\');
+              // 确保驱动器根目录格式为 D:\（避免拼出双冒号）
+              if (parent.match(/^[a-zA-Z]:$/)) {
+                parent += '\\';
+              }
+              this.currentPath = parent;
+            } else {
+              this.currentPath = '';
+            }
           }
         } else {
-          // Unix/Linux路径处理
-          const parts = this.currentPath.split('/');
-          if (parts.length > 2) {
-            // 多级目录，移除最后一部分
-            parts.pop();
-            this.currentPath = parts.join('/');
-          } else if (parts.length === 2 && parts[1] !== '') {
-            // 只有一级目录，如 /home，返回根目录
-            this.currentPath = '/';
-          } else {
-            // 已经在根目录
+          // Unix/Linux路径处理，先清理尾斜杠
+          const trimmed = this.currentPath.replace(/\/+$/, '');
+          if (!trimmed) {
             this.currentPath = '';
+          } else {
+            const parts = trimmed.split('/');
+            if (parts.length > 2) {
+              parts.pop();
+              this.currentPath = parts.join('/');
+            } else if (parts.length === 2 && parts[1] !== '') {
+              // 只有一级目录，如 /home，返回根目录
+              this.currentPath = '/';
+            } else {
+              this.currentPath = '';
+            }
           }
         }
-        this.loadFolders();
+        this.loadFolders(prevPath);
       } else {
         // 已经在根目录，保持不变
-        this.loadFolders();
+        this.loadFolders(prevPath);
       }
     },
 

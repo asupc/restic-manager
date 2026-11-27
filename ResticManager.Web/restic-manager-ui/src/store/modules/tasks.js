@@ -6,8 +6,12 @@ import { taskService } from "../../services/task.service";
 const ACTIVE_INTERVAL = 2000;
 const IDLE_INTERVAL = 30000;
 
-// 定时器不放响应式 state（无需驱动视图），模块级变量即可
+// 定时器与并发控制状态不放响应式 state（无需驱动视图），模块级变量即可
 let timer = null;
+let isRunning = false;
+let pollGeneration = 0;
+let inFlight = false;
+let pendingImmediate = false;
 
 const state = {
   // 进行中（Pending/Running）的任务列表
@@ -30,14 +34,30 @@ const getters = {
 };
 
 const mutations = {
-  SET_DASHBOARD(state, { active, recentlyCompleted }) {
-    state.activeTasks = active || [];
-    state.recentlyCompleted = recentlyCompleted || [];
+  SET_DASHBOARD(state, payload) {
+    const data = payload || {};
+    const recent = data.recentlyCompleted || [];
+    state.activeTasks = data.active || [];
+    state.recentlyCompleted = recent;
+
+    // 修剪 notifiedIds，仅保留仍存在于本次 recentlyCompleted 中的 ID，消除长期运行内存增长
+    const nextNotified = {};
+    recent.forEach(task => {
+      if (task && state.notifiedIds[task.id]) {
+        nextNotified[task.id] = true;
+      }
+    });
+    state.notifiedIds = nextNotified;
   },
   MARK_NOTIFIED(state, id) {
     state.notifiedIds = { ...state.notifiedIds, [id]: true };
   },
   CLEAR_NOTIFIED(state) {
+    state.notifiedIds = {};
+  },
+  RESET_STATE(state) {
+    state.activeTasks = [];
+    state.recentlyCompleted = [];
     state.notifiedIds = {};
   }
 };
@@ -45,38 +65,67 @@ const mutations = {
 const actions = {
   // 登录后（App.vue 挂载/路由切换到业务页时）调用；幂等
   start({ dispatch }) {
+    if (isRunning || !localStorage.getItem("token")) return;
+    isRunning = true;
+    pollGeneration += 1;
+    pendingImmediate = false;
     dispatch("tick");
   },
 
-  // 登出时停止轮询
+  // 登出或离开业务页时停止轮询，拦截在途请求并清空状态
   stop({ commit }) {
+    isRunning = false;
+    pollGeneration += 1;
+    inFlight = false;
+    pendingImmediate = false;
     if (timer) {
       clearTimeout(timer);
       timer = null;
     }
-    commit("CLEAR_NOTIFIED");
+    commit("RESET_STATE");
   },
 
   // 页面提交任务后调用：立即触发一次 tick，让角标即时刷新
   noteSubmitted({ dispatch }) {
+    if (!isRunning) {
+      dispatch("start");
+      return;
+    }
+    if (inFlight) {
+      pendingImmediate = true;
+      return;
+    }
     dispatch("tick");
   },
 
   tick({ state, commit, dispatch }) {
+    if (!isRunning) return;
+    // 未登录不轮询
+    if (!localStorage.getItem("token")) {
+      isRunning = false;
+      return;
+    }
+    if (inFlight) {
+      pendingImmediate = true;
+      return;
+    }
     if (timer) {
       clearTimeout(timer);
       timer = null;
     }
-    // 未登录不轮询
-    if (!localStorage.getItem("token")) return;
+
+    inFlight = true;
+    const gen = pollGeneration;
 
     taskService
-      .getDashboard()
+      .getDashboard({ loading: false, silent: true })
       .then(dashboard => {
-        commit("SET_DASHBOARD", dashboard);
+        if (!isRunning || gen !== pollGeneration) return;
+        const data = dashboard || {};
+        commit("SET_DASHBOARD", data);
 
         // 对新完成的任务弹全局通知（每个任务只弹一次）
-        (dashboard.recentlyCompleted || []).forEach(task => {
+        (data.recentlyCompleted || []).forEach(task => {
           if (state.notifiedIds[task.id]) return;
           commit("MARK_NOTIFIED", task.id);
           if (task.status === "Succeeded") {
@@ -96,6 +145,17 @@ const actions = {
       })
       .catch(() => {})
       .finally(() => {
+        if (!isRunning || gen !== pollGeneration) return;
+        inFlight = false;
+        if (timer) {
+          clearTimeout(timer);
+          timer = null;
+        }
+        if (pendingImmediate) {
+          pendingImmediate = false;
+          dispatch("tick");
+          return;
+        }
         const interval =
           state.activeTasks.length > 0 ? ACTIVE_INTERVAL : IDLE_INTERVAL;
         timer = setTimeout(() => dispatch("tick"), interval);

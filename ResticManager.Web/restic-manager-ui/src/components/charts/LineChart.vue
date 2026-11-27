@@ -1,6 +1,11 @@
 <template>
   <div class="rm-chart" ref="root">
-    <svg :viewBox="`0 0 ${width} ${height}`" preserveAspectRatio="none" class="rm-chart__svg">
+    <svg
+      :viewBox="`0 0 ${width} ${height}`"
+      :style="{ height: height + 'px' }"
+      preserveAspectRatio="none"
+      class="rm-chart__svg"
+    >
       <defs>
         <linearGradient :id="gradId" x1="0" y1="0" x2="0" y2="1">
           <stop offset="0%" :stop-color="color" stop-opacity="0.32"/>
@@ -20,10 +25,10 @@
       </g>
 
       <!-- 面积 -->
-      <path :d="areaPath" :fill="`url(#${gradId})`" />
+      <path v-if="areaPath" :d="areaPath" :fill="`url(#${gradId})`" />
 
       <!-- 折线 -->
-      <path :d="linePath" :stroke="color" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round" />
+      <path v-if="linePath" :d="linePath" :stroke="color" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-linejoin="round" />
 
       <!-- 数据点 + 提示 -->
       <g v-for="(pt, idx) in points" :key="idx">
@@ -47,6 +52,8 @@
 </template>
 
 <script>
+let lineChartUid = 0;
+
 export default {
   name: 'LineChart',
   props: {
@@ -59,15 +66,13 @@ export default {
   },
   data() {
     return {
+      gradId: 'lg-' + (++lineChartUid),
       padX: 16,
       padY: 16,
       hover: -1
     };
   },
   computed: {
-    gradId() {
-      return 'lg-' + Math.random().toString(36).slice(2, 8);
-    },
     max() {
       const m = Math.max(...this.data, 1);
       return Math.ceil(m / 10) * 10 || 10;
@@ -76,20 +81,21 @@ export default {
       return (this.width - this.padX * 2) / Math.max(this.data.length - 1, 1);
     },
     points() {
+      const len = this.data.length;
       return this.data.map((v, i) => ({
-        x: this.padX + this.stepX * i,
+        x: len === 1 ? this.width / 2 : this.padX + this.stepX * i,
         y: this.padY + (1 - v / this.max) * (this.height - this.padY * 2),
         value: v
       }));
     },
     linePath() {
-      if (!this.points.length) return '';
+      if (this.points.length < 2) return '';
       return this.points
         .map((p, i) => (i === 0 ? `M${p.x},${p.y}` : `L${p.x},${p.y}`))
         .join(' ');
     },
     areaPath() {
-      if (!this.points.length) return '';
+      if (this.points.length < 2) return '';
       const first = this.points[0];
       const last = this.points[this.points.length - 1];
       const bottom = this.height - this.padY;
@@ -111,7 +117,6 @@ export default {
 }
 .rm-chart__svg {
   width: 100%;
-  height: 240px;
   display: block;
 }
 .rm-chart__dot {

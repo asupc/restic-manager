@@ -82,6 +82,16 @@ import { pollTask } from '@/utils/task-poller';
 import { typeIcon as repoTypeIcon } from '@/utils/repository-types';
 import SnapshotList from '@/components/SnapshotList.vue';
 
+function safeParseJson(json, fallback = {}) {
+    if (!json) return fallback;
+    try {
+        const parsed = JSON.parse(json);
+        return parsed === null || parsed === undefined ? fallback : parsed;
+    } catch (e) {
+        return fallback;
+    }
+}
+
 export default {
     name: 'RepositorySnapshots',
     components: { SnapshotList },
@@ -91,7 +101,7 @@ export default {
             snapshots: [],
             loading: false,
             syncing: false,
-            maintenanceLoading: false,
+            maintenanceRunningCount: 0,
             searchDialogVisible: false,
             searchPattern: '',
             searchResults: [],
@@ -100,29 +110,80 @@ export default {
             searchError: ''
         };
     },
+    computed: {
+        maintenanceLoading() {
+            return this.maintenanceRunningCount > 0;
+        }
+    },
+    watch: {
+        '$route.params.id'(newId, oldId) {
+            if (newId === oldId) return;
+            this._routeToken += 1;
+            this._searchSeq += 1;
+            this._trackedTaskIds = new Set();
+            this._emptyPromptShown = false;
+            this.syncing = false;
+            this.maintenanceRunningCount = 0;
+            this.searching = false;
+            this.searchDialogVisible = false;
+            this.searchResults = [];
+            this.searched = false;
+            this.searchError = '';
+            this.repository = null;
+            this.snapshots = [];
+            this.initPage();
+        }
+    },
+    created() {
+        this._routeToken = 0;
+        this._fetchReqSeq = 0;
+        this._searchSeq = 0;
+        this._trackedTaskIds = new Set();
+    },
     methods: {
         repoTypeIcon,
         goBack() { this.$router.go(-1); },
+        async initPage() {
+            const token = this._routeToken;
+            await this.fetchSnapshots();
+            if (this._destroyed || token !== this._routeToken) return;
+            this.resumeActiveTasks();
+            this.maybePromptEmptySync();
+        },
         async fetchSnapshots() {
             const id = this.$route.params.id;
+            const token = this._routeToken;
+            const reqSeq = ++this._fetchReqSeq;
             this.loading = true;
             try {
-                this.repository = await repositoryService.getRepository(id);
-                this.snapshots = await repositoryService.getSnapshots(id);
+                const [repo, snapshots] = await Promise.all([
+                    repositoryService.getRepository(id),
+                    repositoryService.getSnapshots(id)
+                ]);
+                if (this._destroyed || token !== this._routeToken || reqSeq !== this._fetchReqSeq) return;
+                this.repository = repo;
+                this.snapshots = snapshots;
             } catch (e) {
+                if (this._destroyed || token !== this._routeToken || reqSeq !== this._fetchReqSeq) return;
                 Message.error('加载快照失败: ' + e.message);
             } finally {
-                this.loading = false;
+                if (!this._destroyed && token === this._routeToken && reqSeq === this._fetchReqSeq) {
+                    this.loading = false;
+                }
             }
         },
         // 提交后台任务后轮询到终态并提示；loadingFlag 是本页按钮 loading 字段名。
         // 返回任务是否成功。
-        async awaitTask(taskId, { loadingFlag = null, label = '操作', successMessage = null } = {}) {
-            if (loadingFlag) this[loadingFlag] = true;
+        async awaitTask(taskId, { loadingFlag = null, label = '操作', successMessage = null, isMaintenance = false, token = this._routeToken } = {}) {
+            if (this._trackedTaskIds.has(taskId)) return false;
+            this._trackedTaskIds.add(taskId);
+            const myToken = token;
+            if (isMaintenance) this.maintenanceRunningCount += 1;
+            else if (loadingFlag) this[loadingFlag] = true;
             let ok = false;
             try {
-                const task = await pollTask(taskId, { shouldStop: () => this._destroyed });
-                if (this._destroyed) return false;
+                const task = await pollTask(taskId, { shouldStop: () => this._destroyed || myToken !== this._routeToken });
+                if (this._destroyed || myToken !== this._routeToken) return false;
                 ok = task.status === 'Succeeded';
                 if (ok) {
                     Message.success(successMessage ? successMessage(task) : label + '完成');
@@ -130,9 +191,14 @@ export default {
                     Message.error(label + '失败: ' + (task.error || ''));
                 }
             } catch (e) {
+                if (this._destroyed || myToken !== this._routeToken) return false;
                 if (e.message !== 'cancelled') Message.error(label + '失败: ' + (e.message || ''));
             } finally {
-                if (loadingFlag) this[loadingFlag] = false;
+                if (myToken === this._routeToken) {
+                    this._trackedTaskIds.delete(taskId);
+                    if (isMaintenance) this.maintenanceRunningCount = Math.max(0, this.maintenanceRunningCount - 1);
+                    else if (loadingFlag) this[loadingFlag] = false;
+                }
             }
             return ok;
         },
@@ -152,7 +218,7 @@ export default {
                 loadingFlag: 'syncing',
                 label: '同步',
                 successMessage: (task) => {
-                    const r = task.resultJson ? JSON.parse(task.resultJson) : {};
+                    const r = safeParseJson(task.resultJson, {});
                     const n = v => (v === null || v === undefined ? 0 : v);
                     return `同步完成: 新增 ${n(r.added)}、更新 ${n(r.updated)}、标记已删除 ${n(r.markedDeleted)}（远端共 ${n(r.remoteTotal)} 条）`;
                 }
@@ -187,7 +253,7 @@ export default {
                 label: '删除',
                 // resultJson 带 localCacheWarning 时说明远端已删但本地缓存更新失败
                 successMessage: (task) => {
-                    const r = task.resultJson ? JSON.parse(task.resultJson) : {};
+                    const r = safeParseJson(task.resultJson, {});
                     return r.localCacheWarning ? '快照已删除；' + r.localCacheWarning : '快照已删除';
                 }
             });
@@ -207,7 +273,7 @@ export default {
             const ok = await this.awaitTask(res.taskId, {
                 label: '批量删除',
                 successMessage: (task) => {
-                    const r = task.resultJson ? JSON.parse(task.resultJson) : {};
+                    const r = safeParseJson(task.resultJson, {});
                     const n = v => (v === null || v === undefined ? 0 : v);
                     let msg = `批量删除完成: 远端删除 ${n(r.deleted)} 个，本地标记 ${n(r.markedDeleted)} 个`;
                     if (r.localCacheWarning) msg += '；' + r.localCacheWarning;
@@ -242,7 +308,7 @@ export default {
                 return;
             }
             this.$store.dispatch('tasks/noteSubmitted', res.taskId);
-            const ok = await this.awaitTask(res.taskId, { loadingFlag: 'maintenanceLoading', label: meta.title });
+            const ok = await this.awaitTask(res.taskId, { isMaintenance: true, label: meta.title });
             if (ok && (command === 'prune' || command === 'repair-snapshots')) {
                 await this.fetchSnapshots();
             }
@@ -260,29 +326,38 @@ export default {
                 Message.warning('请输入搜索模式');
                 return;
             }
-            let res;
-            try {
-                res = await repositoryService.findInSnapshots(this.$route.params.id, pattern);
-            } catch (e) {
-                this.searchError = e.response?.data?.message || e.message || '';
-                return;
-            }
+            const seq = ++this._searchSeq;
+            const token = this._routeToken;
             this.searching = true;
             this.searchError = '';
-            this.$store.dispatch('tasks/noteSubmitted', res.taskId);
             try {
-                const task = await pollTask(res.taskId, { shouldStop: () => this._destroyed });
-                if (this._destroyed) return;
+                let res;
+                try {
+                    res = await repositoryService.findInSnapshots(this.$route.params.id, pattern);
+                } catch (e) {
+                    if (this._destroyed || seq !== this._searchSeq || token !== this._routeToken) return;
+                    this.searchError = e.response?.data?.message || e.message || '';
+                    return;
+                }
+                if (this._destroyed || seq !== this._searchSeq || token !== this._routeToken) return;
+                this.$store.dispatch('tasks/noteSubmitted', res.taskId);
+                const task = await pollTask(res.taskId, {
+                    shouldStop: () => this._destroyed || seq !== this._searchSeq || token !== this._routeToken
+                });
+                if (this._destroyed || seq !== this._searchSeq || token !== this._routeToken) return;
                 this.searched = true;
                 if (task.status === 'Succeeded') {
-                    this.searchResults = task.resultJson ? JSON.parse(task.resultJson) : [];
+                    this.searchResults = safeParseJson(task.resultJson, []);
                 } else {
                     this.searchError = '搜索失败: ' + (task.error || '');
                 }
             } catch (e) {
+                if (this._destroyed || seq !== this._searchSeq || token !== this._routeToken) return;
                 if (e.message !== 'cancelled') this.searchError = '搜索失败: ' + (e.message || '');
             } finally {
-                this.searching = false;
+                if (!this._destroyed && seq === this._searchSeq && token === this._routeToken) {
+                    this.searching = false;
+                }
             }
         },
         // 替代旧后端"空缓存自动同步"的体验：检测到空缓存时引导用户发起异步同步
@@ -290,6 +365,9 @@ export default {
             if (this._emptyPromptShown) return;
             if (!this.repository || !this.repository.isInitialized) return;
             if (this.snapshots.length > 0) return;
+            const repoId = Number(this.$route.params.id);
+            const active = this.$store.getters['tasks/activeByRepository'](repoId) || [];
+            if (this.syncing || active.some(t => t.type === TASK_TYPES.SnapshotSync)) return;
             this._emptyPromptShown = true;
             try {
                 await MessageBox.confirm(
@@ -305,49 +383,63 @@ export default {
         // 页面重新进入时，恢复本仓库仍在执行的后台任务的轮询（后端重启后任务已标失败，自然拿不到）
         resumeActiveTasks() {
             const repoId = Number(this.$route.params.id);
+            const token = this._routeToken;
             const active = this.$store.getters['tasks/activeByRepository'](repoId);
             active.forEach(t => {
+                if (this._trackedTaskIds.has(t.id)) return;
                 switch (t.type) {
                     case TASK_TYPES.SnapshotSync:
-                        this.awaitTask(t.id, { loadingFlag: 'syncing', label: '同步' })
-                            .then(ok => { if (ok) this.fetchSnapshots(); });
+                        this.awaitTask(t.id, { loadingFlag: 'syncing', label: '同步', token })
+                            .then(ok => {
+                                if (ok && !this._destroyed && token === this._routeToken) this.fetchSnapshots();
+                            });
                         break;
                     case TASK_TYPES.RepositoryUnlock:
                     case TASK_TYPES.RepositoryPrune:
                     case TASK_TYPES.RepositoryDeepCheck:
                     case TASK_TYPES.RepositoryRepairIndex:
                     case TASK_TYPES.RepositoryRepairSnapshots:
-                        this.awaitTask(t.id, { loadingFlag: 'maintenanceLoading', label: '运维操作' })
+                        this.awaitTask(t.id, { isMaintenance: true, label: '运维操作', token })
                             .then(ok => {
-                                if (ok && (t.type === TASK_TYPES.RepositoryPrune || t.type === TASK_TYPES.RepositoryRepairSnapshots)) {
+                                if (ok && !this._destroyed && token === this._routeToken && (t.type === TASK_TYPES.RepositoryPrune || t.type === TASK_TYPES.RepositoryRepairSnapshots)) {
                                     this.fetchSnapshots();
                                 }
                             });
                         break;
-                    case TASK_TYPES.SnapshotFind:
+                    case TASK_TYPES.SnapshotFind: {
+                        const seq = ++this._searchSeq;
+                        this._trackedTaskIds.add(t.id);
                         this.searchDialogVisible = true;
                         this.searching = true;
-                        pollTask(t.id, { shouldStop: () => this._destroyed })
+                        pollTask(t.id, { shouldStop: () => this._destroyed || token !== this._routeToken || seq !== this._searchSeq })
                             .then(task => {
-                                if (this._destroyed) return;
+                                if (this._destroyed || token !== this._routeToken || seq !== this._searchSeq) return;
                                 this.searched = true;
                                 if (task.status === 'Succeeded') {
-                                    this.searchResults = task.resultJson ? JSON.parse(task.resultJson) : [];
+                                    this.searchResults = safeParseJson(task.resultJson, []);
                                 } else {
                                     this.searchError = '搜索失败: ' + (task.error || '');
                                 }
                             })
                             .catch(() => {})
-                            .finally(() => { this.searching = false; });
+                            .finally(() => {
+                                if (token === this._routeToken) {
+                                    this._trackedTaskIds.delete(t.id);
+                                    if (seq === this._searchSeq) this.searching = false;
+                                }
+                            });
                         break;
+                    }
                     case TASK_TYPES.SnapshotRestore:
                     case TASK_TYPES.FileRestore:
                     case TASK_TYPES.SnapshotDelete:
                     case TASK_TYPES.SnapshotBatchDelete:
                     case TASK_TYPES.SnapshotTagSet:
                         // 快照级操作在途：完成（或失败）后刷新列表反映最新状态
-                        this.awaitTask(t.id, { label: t.title || '操作' })
-                            .then(() => this.fetchSnapshots());
+                        this.awaitTask(t.id, { label: t.title || '操作', token })
+                            .then(() => {
+                                if (!this._destroyed && token === this._routeToken) this.fetchSnapshots();
+                            });
                         break;
                     default:
                         break;
@@ -362,13 +454,12 @@ export default {
         }
     },
     async mounted() {
-        await this.fetchSnapshots();
-        this.maybePromptEmptySync();
-        this.resumeActiveTasks();
+        await this.initPage();
     },
     beforeDestroy() {
         // 停止本页所有在途任务的轮询
         this._destroyed = true;
+        this._routeToken += 1;
     }
 };
 </script>

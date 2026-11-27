@@ -89,9 +89,14 @@ const router = new VueRouter({
 
 // Navigation guard
 router.beforeEach(async (to, from, next) => {
-  // 检查是否已经有用户存在
-  const hasUserResponse = await authService.hasAnyUser();
-  const hasUser = hasUserResponse.hasUser;
+  // 检查是否已经有用户存在；后端不可用时降级放行，避免白屏锁死
+  let hasUser = true;
+  try {
+    const hasUserResponse = await authService.hasAnyUser();
+    hasUser = !!(hasUserResponse && hasUserResponse.hasUser);
+  } catch (e) {
+    hasUser = true;
+  }
 
   // 如果没有用户且不是去注册页面，则跳转到注册页面
   if (!hasUser && to.path !== "/register") {
@@ -105,7 +110,7 @@ router.beforeEach(async (to, from, next) => {
 
   const publicPages = ["/login", "/register"];
   const authRequired = !publicPages.includes(to.path);
-  const loggedIn = localStorage.getItem("user");
+  const loggedIn = authService.isAuthenticated();
 
   if (authRequired && !loggedIn) {
     return next("/login");

@@ -23,7 +23,7 @@
                 </el-table-column>
                 <el-table-column label="状态" width="80" align="center">
                     <template slot-scope="scope">
-                        <el-switch :value="scope.row.isEnabled" @change="(val) => toggleSetting(scope.row, val)"></el-switch>
+                        <el-switch :value="scope.row.isEnabled" :disabled="scope.row.saving" @change="(val) => toggleSetting(scope.row, val)"></el-switch>
                     </template>
                 </el-table-column>
                 <el-table-column label="执行计划" min-width="300">
@@ -101,12 +101,13 @@ export default {
         },
         // 开关即时保存（失败保持原状态,el-switch 为受控值无需回滚）
         async toggleSetting(row, val) {
-            await this.updateSetting(row, { isEnabled: val, cronExpression: row.cronEdit });
+            await this.updateSetting(row, { isEnabled: val, cronExpression: row.cronExpression });
         },
         async saveCron(row) {
             await this.updateSetting(row, { isEnabled: row.isEnabled, cronExpression: row.cronEdit });
         },
         async updateSetting(row, payload) {
+            if (row.saving) return;
             row.saving = true;
             try {
                 const updated = await maintenanceService.updateMaintenanceSetting(row.id, payload);

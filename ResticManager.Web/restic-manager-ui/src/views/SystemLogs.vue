@@ -194,11 +194,25 @@ export default {
       return !!(this.filters.keyword || this.filters.level || this.dateRange);
     }
   },
+  created() {
+    this._fetchSeq = 0;
+  },
   mounted() {
     this.fetchLogs();
   },
+  beforeDestroy() {
+    this._destroyed = true;
+    this.clearFilterTimer();
+  },
   methods: {
+    clearFilterTimer() {
+      if (this.filterTimer) {
+        clearTimeout(this.filterTimer);
+        this.filterTimer = null;
+      }
+    },
     async fetchLogs() {
+      const seq = ++this._fetchSeq;
       this.loading = true;
       try {
         const res = await systemLogService.getLogsPaged({
@@ -209,36 +223,46 @@ export default {
           startDate: (this.dateRange && this.dateRange[0]) || null,
           endDate: (this.dateRange && this.dateRange[1]) || null
         });
+        if (this._destroyed || seq !== this._fetchSeq) return;
         this.logs = res.items || [];
         this.total = res.total || 0;
       } catch (e) {
+        if (this._destroyed || seq !== this._fetchSeq) return;
         Message.error('加载日志失败: ' + (e.response?.data?.message || e.message));
       } finally {
-        this.loading = false;
+        if (!this._destroyed && seq === this._fetchSeq) {
+          this.loading = false;
+        }
       }
     },
     handleFilterChange() {
-      if (this.filterTimer) clearTimeout(this.filterTimer);
+      this.clearFilterTimer();
       this.filterTimer = setTimeout(() => {
+        this.filterTimer = null;
+        if (this._destroyed) return;
         this.page = 1;
         this.fetchLogs();
       }, 300);
     },
     handleDateChange() {
+      this.clearFilterTimer();
       this.page = 1;
       this.fetchLogs();
     },
     resetFilters() {
+      this.clearFilterTimer();
       this.filters = { keyword: '', level: null };
       this.dateRange = null;
       this.page = 1;
       this.fetchLogs();
     },
     handlePageChange(newPage) {
+      this.clearFilterTimer();
       this.page = newPage;
       this.fetchLogs();
     },
     handleSizeChange(newSize) {
+      this.clearFilterTimer();
       this.pageSize = newSize;
       this.page = 1;
       this.fetchLogs();

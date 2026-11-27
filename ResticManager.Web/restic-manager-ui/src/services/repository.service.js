@@ -107,19 +107,6 @@ export const repositoryService = {
     return response.data;
   },
 
-  //   /**
-  //    * 获取快照中的文件列表（树形结构）
-  //    * @param {number} id 仓库ID
-  //    * @param {string} snapshotId 快照ID
-  //    * @returns {Promise<Array>} 文件树形结构列表
-  //    */
-  //   async getSnapshotFilesTree(id, snapshotId) {
-  //     const response = await api.get(
-  //       `/Repository/${id}/snapshots/${snapshotId}/subdirectory-files-tree`
-  //     );
-  //     return response.data;
-  //   },
-
   /**
    * 获取快照中指定子目录的文件列表（树形结构，异步任务，返回 { taskId }，结果为节点数组）
    * @param {number} id 仓库ID
@@ -129,7 +116,8 @@ export const repositoryService = {
    */
   async getSnapshotSubdirectoryFilesTree(id, snapshotId, path) {
     const response = await api.get(
-      `/Repository/${id}/snapshots/${snapshotId}/subdirectory-files-tree?path=${path}`
+      `/Repository/${id}/snapshots/${snapshotId}/subdirectory-files-tree`,
+      { params: { path: path || "" } }
     );
     return response.data;
   },
@@ -219,9 +207,9 @@ export const repositoryService = {
   async downloadSnapshotFile(id, snapshotId, path) {
     const response = await api.get(
       `/repository/${id}/snapshots/${snapshotId}/download?path=${encodeURIComponent(path)}`,
-      { responseType: "blob" }
+      { responseType: "blob", timeout: 0 }
     );
-    const fileName = path.split("/").filter(Boolean).pop() || "download";
+    const fileName = (path || "").split("/").filter(Boolean).pop() || "download";
     const url = window.URL.createObjectURL(new Blob([response.data]));
     const link = document.createElement("a");
     link.href = url;
@@ -229,6 +217,8 @@ export const repositoryService = {
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
-    window.URL.revokeObjectURL(url);
+    setTimeout(() => {
+      window.URL.revokeObjectURL(url);
+    }, 1000);
   },
 };
