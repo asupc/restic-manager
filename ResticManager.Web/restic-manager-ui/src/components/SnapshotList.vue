@@ -1,35 +1,85 @@
 <template>
-  <div>
-    <!-- 工具栏 -->
+  <div class="snapshot-list">
+    <!-- 顶部工具栏与快速筛选 -->
     <div class="snapshot-toolbar">
       <div class="toolbar-left">
-        <el-input v-model="searchKeyword" placeholder="按主机名或路径搜索..." prefix-icon="el-icon-search" size="small" clearable class="toolbar-search"></el-input>
-        <span class="text-secondary" style="font-size:12px;">共 {{ filteredSnapshots.length }} 个快照</span>
+        <el-input
+          v-model="searchKeyword"
+          placeholder="搜索短 ID、主机名、标签或路径..."
+          prefix-icon="el-icon-search"
+          size="small"
+          clearable
+          class="toolbar-search"
+        ></el-input>
+        <div class="toolbar-stats">
+          <span class="stat-pill">共 <strong>{{ snapshots.length }}</strong> 个快照</span>
+          <span v-if="hasActiveFilter" class="stat-pill stat-pill--match">
+            匹配 <strong>{{ filteredSnapshots.length }}</strong> 个
+          </span>
+        </div>
       </div>
       <div class="toolbar-right">
-        <el-button v-if="!compareMode" type="danger" plain size="small" icon="el-icon-delete" @click="openBatchDelete" :disabled="selectedRows.length === 0">
-          批量删除{{ selectedRows.length ? `(${selectedRows.length})` : '' }}
-        </el-button>
-        <el-button v-if="!compareMode" type="primary" plain size="small" icon="el-icon-sort" @click="enterCompareMode" :disabled="snapshots.length < 2">比较快照</el-button>
-        <template v-else>
-          <el-tag effect="plain" size="small">{{ selectedSnapshots.length }}/2 已选</el-tag>
-          <el-button type="success" size="small" icon="el-icon-view" @click="showDiff" :disabled="selectedSnapshots.length !== 2">显示差异</el-button>
-          <el-button size="small" @click="exitCompareMode">取消</el-button>
-        </template>
+        <span class="toolbar-hint" v-if="selectedRows.length === 0 && snapshots.length > 0">
+          <i class="el-icon-info"></i> 勾选 2 个快照可对比差异，勾选多个可批量删除
+        </span>
       </div>
     </div>
 
-    <!-- 选中提示 -->
-    <el-alert v-if="compareMode && selectedSnapshots.length > 0" :title="'已选择: ' + selectedSnapshots.map(s => formatShortTime(s.time)).join('  →  ')" type="info" show-icon :closable="false" class="mb-3"></el-alert>
+    <!-- 选中态批处理操作条 -->
+    <transition name="batch-bar-fade">
+      <div v-if="selectedRows.length > 0" class="batch-action-bar">
+        <div class="batch-action-bar__info">
+          <span class="batch-action-bar__dot"></span>
+          <span class="batch-action-bar__count">
+            已选 <strong>{{ selectedRows.length }}</strong> 个快照
+          </span>
+          <span v-if="selectedRows.length === 2" class="batch-action-bar__pair">
+            {{ formatShortTime(sortedSelectedPair[0].time) }} → {{ formatShortTime(sortedSelectedPair[1].time) }}
+          </span>
+          <span v-else class="batch-action-bar__tip">
+            选择 2 个同路径快照即可对比差异
+          </span>
+        </div>
+        <div class="batch-action-bar__actions">
+          <el-button
+            :type="selectedRows.length === 2 ? 'primary' : 'default'"
+            :plain="selectedRows.length !== 2"
+            size="mini"
+            icon="el-icon-sort"
+            :disabled="selectedRows.length !== 2"
+            @click="compareSelectedRows"
+          >对比差异</el-button>
+          <el-button
+            type="danger"
+            plain
+            size="mini"
+            icon="el-icon-delete"
+            @click="openBatchDelete"
+          >批量删除</el-button>
+          <el-button
+            size="mini"
+            type="text"
+            class="batch-action-bar__clear"
+            @click="clearTableSelection"
+          >清空选择</el-button>
+        </div>
+      </div>
+    </transition>
 
     <!-- 空状态 -->
     <div v-if="!loading && filteredSnapshots.length === 0" class="empty">
-      <div class="empty__title">该仓库暂无快照</div>
-      <div class="empty__desc">运行备份任务后,快照会出现在这里</div>
+      <i :class="hasActiveFilter ? 'el-icon-search' : 'el-icon-camera'" class="empty__icon"></i>
+      <div class="empty__title">{{ hasActiveFilter ? '未找到匹配的快照' : '该仓库暂无快照' }}</div>
+      <div class="empty__desc">
+        {{ hasActiveFilter ? '尝试更换关键词，或清空筛选条件查看全部快照' : '运行备份任务后，快照会出现在这里' }}
+      </div>
+      <el-button v-if="hasActiveFilter" size="small" plain class="mt-3" @click="searchKeyword = ''">
+        清空筛选
+      </el-button>
     </div>
 
     <!-- 快照表格 -->
-    <div v-else v-loading="loading">
+    <div v-else v-loading="loading" class="snapshot-table-wrap">
       <el-table
         ref="snapshotTable"
         :data="paginatedSnapshots"
@@ -39,56 +89,82 @@
         @selection-change="onSelectionChange"
       >
         <el-table-column type="selection" width="42" reserve-selection></el-table-column>
-        <el-table-column label="时间" min-width="125">
+        <el-table-column label="时间" min-width="130">
           <template #default="scope">
-            <span class="text-bold">{{ formatShortTime(scope.row.time) }}</span>
+            <span class="snapshot-time" :title="formatFullTime(scope.row.time)">
+              {{ formatShortTime(scope.row.time) }}
+            </span>
           </template>
         </el-table-column>
-        <el-table-column label="快照 ID" width="105">
+        <el-table-column label="快照 ID" width="136">
           <template #default="scope">
-            <span class="text-mono snapshot-id">{{ scope.row.short_id }}</span>
+            <div class="snapshot-id-cell">
+              <span class="snapshot-id-pill text-mono" :title="scope.row.id || scope.row.short_id">
+                {{ scope.row.short_id }}
+              </span>
+              <el-tooltip content="复制完整快照 ID" placement="top" :open-delay="300">
+                <button
+                  type="button"
+                  class="copy-id-btn"
+                  aria-label="复制完整快照 ID"
+                  @click.stop="copySnapshotId(scope.row)"
+                >
+                  <i class="el-icon-document-copy"></i>
+                </button>
+              </el-tooltip>
+            </div>
           </template>
         </el-table-column>
-        <el-table-column label="主机" width="110" show-overflow-tooltip>
-          <template #default="scope">{{ scope.row.hostname }}</template>
-        </el-table-column>
-        <el-table-column label="路径" min-width="150" show-overflow-tooltip>
+        <el-table-column label="主机" width="115" show-overflow-tooltip>
           <template #default="scope">
-            <span class="text-mono">{{ (scope.row.paths || []).join(', ') }}</span>
+            <span class="snapshot-host">{{ scope.row.hostname || '-' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="标签" min-width="130">
+        <el-table-column label="路径" min-width="160" show-overflow-tooltip>
           <template #default="scope">
-            <template v-if="scope.row.tags && scope.row.tags.length">
-              <el-tag v-for="t in scope.row.tags" :key="t" size="mini" effect="plain" class="table-tag">{{ t }}</el-tag>
-            </template>
-            <span v-else class="text-secondary">-</span>
+            <span class="text-mono snapshot-path">{{ (scope.row.paths || []).join(', ') || '-' }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="文件" width="75" align="right">
-          <template #default="scope">{{ scope.row.summary?.total_files_processed || 0 }}</template>
-        </el-table-column>
-        <el-table-column label="大小" width="90" align="right">
-          <template #default="scope">{{ formatFileSize(scope.row.summary?.total_bytes_processed || 0) }}</template>
-        </el-table-column>
-        <el-table-column label="耗时" width="80" align="right">
-          <template #default="scope">{{ formatDuration(scope.row.summary?.backup_end, scope.row.summary?.backup_start) }}</template>
-        </el-table-column>
-        <el-table-column v-if="compareMode" label="比较" width="55" align="center">
+        <el-table-column label="标签" min-width="145">
           <template #default="scope">
-            <el-checkbox
-              :value="isSnapshotSelected(scope.row)"
-              :disabled="!isSnapshotSelected(scope.row) && selectedSnapshots.length >= 2"
-              @change="val => handleSnapshotSelect(scope.row, val)"
-            ></el-checkbox>
+            <div v-if="scope.row.tags && scope.row.tags.length" class="tag-cell">
+              <span v-for="t in scope.row.tags" :key="t" class="snapshot-tag-pill">{{ t }}</span>
+            </div>
+            <button
+              v-else
+              type="button"
+              class="tag-ghost-trigger"
+              @click="onEditTags(scope.row)"
+            >
+              <i class="el-icon-plus"></i> 添加标签
+            </button>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="350" fixed="right">
+        <el-table-column label="文件" width="76" align="right">
           <template #default="scope">
-            <el-button size="mini" type="text" icon="el-icon-document" @click="onViewFiles(scope.row)">文件</el-button>
-            <el-button size="mini" type="text" icon="el-icon-back" @click="onRestore(scope.row)">恢复</el-button>
-            <el-button size="mini" type="text" icon="el-icon-price-tag" @click="onEditTags(scope.row)">标签</el-button>
-            <el-button size="mini" type="text" class="text-danger" icon="el-icon-delete" @click="onDelete(scope.row)">删除</el-button>
+            <span class="tabular-num">{{ scope.row.summary?.total_files_processed || 0 }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="大小" width="92" align="right">
+          <template #default="scope">
+            <span class="tabular-num">{{ formatFileSize(scope.row.summary?.total_bytes_processed || 0) }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column label="耗时" width="78" align="right">
+          <template #default="scope">
+            <span class="tabular-num text-secondary">
+              {{ formatDuration(scope.row.summary?.backup_end, scope.row.summary?.backup_start) }}
+            </span>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="278" fixed="right" align="right">
+          <template #default="scope">
+            <div class="row-actions">
+              <el-button size="mini" type="text" icon="el-icon-folder-opened" class="row-action-btn" @click="onViewFiles(scope.row)">浏览文件</el-button>
+              <el-button size="mini" type="text" icon="el-icon-refresh-left" class="row-action-btn" @click="onRestore(scope.row)">恢复</el-button>
+              <el-button size="mini" type="text" icon="el-icon-price-tag" class="row-action-btn" @click="onEditTags(scope.row)">标签</el-button>
+              <el-button size="mini" type="text" icon="el-icon-delete" class="row-action-btn row-action-btn--danger" @click="onDelete(scope.row)">删除</el-button>
+            </div>
           </template>
         </el-table-column>
       </el-table>
@@ -117,7 +193,7 @@
         </el-form-item>
         <el-form-item>
           <el-checkbox v-model="restoreForm.verify">恢复后校验文件内容 (--verify)</el-checkbox>
-          <div class="form-tip"><i class="el-icon-info"></i> 校验会读取恢复后的文件与快照比对,耗时更长但更可靠</div>
+          <div class="form-tip"><i class="el-icon-info"></i> 校验会读取恢复后的文件与快照比对，耗时更长但更可靠</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -130,13 +206,13 @@
     <el-dialog :visible.sync="deleteDialogVisible" title="删除快照" width="480px" :close-on-click-modal="false" append-to-body>
       <el-alert type="warning" :closable="false" show-icon>
         <template #title>
-          <span>确定要删除这个快照吗?删除后无法恢复</span>
+          <span>确定要删除这个快照吗？删除后无法恢复</span>
         </template>
       </el-alert>
       <div class="delete-meta">
         <div><span class="text-secondary">快照 ID</span><span class="text-mono">{{ deleteItem?.short_id }}</span></div>
         <div><span class="text-secondary">主机名</span><span>{{ deleteItem?.hostname }}</span></div>
-        <div><span class="text-secondary">创建时间</span><span>{{ deleteItem ? formatFullTime(deleteItem.summary?.backup_start) : '' }}</span></div>
+        <div><span class="text-secondary">创建时间</span><span>{{ deleteItem ? formatFullTime(deleteItem.summary?.backup_start || deleteItem.time) : '' }}</span></div>
       </div>
       <template #footer>
         <el-button @click="deleteDialogVisible = false">取消</el-button>
@@ -148,7 +224,7 @@
     <el-dialog :visible.sync="batchDeleteDialogVisible" title="批量删除快照" width="520px" :close-on-click-modal="false" append-to-body>
       <el-alert type="warning" :closable="false" show-icon>
         <template #title>
-          <span>确定要删除选中的 {{ batchDeleteItems.length }} 个快照吗?删除后无法恢复</span>
+          <span>确定要删除选中的 {{ batchDeleteItems.length }} 个快照吗？删除后无法恢复</span>
         </template>
       </el-alert>
       <div class="batch-delete-list">
@@ -185,7 +261,7 @@
         ></el-input>
         <el-button v-else size="mini" icon="el-icon-plus" @click="showTagInput">添加标签</el-button>
       </div>
-      <div class="form-tip"><i class="el-icon-info"></i> 保存将覆盖该快照的全部标签(restic tag --set)</div>
+      <div class="form-tip"><i class="el-icon-info"></i> 保存将覆盖该快照的全部标签（restic tag --set）</div>
       <template #footer>
         <el-button @click="tagDialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="tagSaving" @click="saveTags">保存</el-button>
@@ -198,47 +274,74 @@
         <el-alert v-if="diffError" type="error" :title="diffError" show-icon :closable="false" class="mb-3"></el-alert>
         <div v-if="diffLoading" v-loading="true" class="diff-loading"></div>
         <template v-else-if="diffResult && diffResult.statistics">
-          <div class="diff-stats">
-            <div class="diff-stat diff-stat--total">
-              <div class="diff-stat__num">{{ diffResult.statistics.changed_files }}</div>
-              <div class="diff-stat__label">变更文件</div>
+          <!-- 4 张 KPI 统计卡片 -->
+          <div class="diff-kpi-grid">
+            <div class="diff-kpi diff-kpi--add">
+              <div class="diff-kpi__top">
+                <span class="diff-kpi__label">新增</span>
+                <span class="diff-code-badge diff-code-badge--add">+</span>
+              </div>
+              <div class="diff-kpi__num tabular-num">{{ diffStatsSummary.added }}</div>
             </div>
-            <div class="diff-stat diff-stat--add">
-              <div class="diff-stat__num">{{ diffResult.statistics.added?.files || 0 }}</div>
-              <div class="diff-stat__label">新增</div>
+            <div class="diff-kpi diff-kpi--mod">
+              <div class="diff-kpi__top">
+                <span class="diff-kpi__label">修改</span>
+                <span class="diff-code-badge diff-code-badge--mod">M</span>
+              </div>
+              <div class="diff-kpi__num tabular-num">{{ diffStatsSummary.modified }}</div>
             </div>
-            <div class="diff-stat diff-stat--remove">
-              <div class="diff-stat__num">{{ diffResult.statistics.removed?.files || 0 }}</div>
-              <div class="diff-stat__label">删除</div>
+            <div class="diff-kpi diff-kpi--rem">
+              <div class="diff-kpi__top">
+                <span class="diff-kpi__label">删除</span>
+                <span class="diff-code-badge diff-code-badge--rem">-</span>
+              </div>
+              <div class="diff-kpi__num tabular-num">{{ diffStatsSummary.removed }}</div>
+            </div>
+            <div class="diff-kpi diff-kpi--total">
+              <div class="diff-kpi__top">
+                <span class="diff-kpi__label">总变化</span>
+                <span class="diff-code-badge diff-code-badge--total">Σ</span>
+              </div>
+              <div class="diff-kpi__num tabular-num">{{ diffStatsSummary.total }}</div>
             </div>
           </div>
 
+          <!-- 紧凑筛选栏 -->
           <div class="diff-toolbar">
-            <el-select v-model="diffTypeFilter" size="small" placeholder="筛选变更类型" clearable style="width: 140px;">
+            <el-select v-model="diffTypeFilter" size="small" placeholder="全部类型" clearable class="diff-toolbar__select">
               <el-option label="新增 (+)" value="+"></el-option>
-              <el-option label="删除 (-)" value="-"></el-option>
               <el-option label="修改 (M)" value="M"></el-option>
+              <el-option label="删除 (-)" value="-"></el-option>
             </el-select>
-            <el-input v-model="diffSearchKeyword" placeholder="搜索文件路径..." prefix-icon="el-icon-search" size="small" clearable style="width: 280px;" @keyup.enter.native="diffCurrentPage = 1"></el-input>
-            <span class="text-muted" style="font-size:12px;">{{ filteredDiffChanges.length }} 项</span>
+            <el-input
+              v-model="diffSearchKeyword"
+              placeholder="搜索文件路径..."
+              prefix-icon="el-icon-search"
+              size="small"
+              clearable
+              class="diff-toolbar__search"
+              @keyup.enter.native="diffCurrentPage = 1"
+            ></el-input>
+            <span class="diff-toolbar__count tabular-num">共 {{ filteredDiffChanges.length }} 项</span>
           </div>
 
           <el-table :data="paginatedDiffChanges" size="small" stripe>
-            <el-table-column label="类型" width="100">
+            <el-table-column label="类型" width="120">
               <template #default="scope">
-                <span class="rm-badge" :class="`rm-badge--${getModifierType(scope.row.modifier)}`">
-                  {{ getModifierLabel(scope.row.modifier) }}
+                <span class="diff-type-pill" :class="`diff-type-pill--${getModifierTone(scope.row.modifier)}`">
+                  <span class="diff-type-pill__code text-mono">{{ getModifierCode(scope.row.modifier) }}</span>
+                  <span class="diff-type-pill__text">{{ getModifierLabel(scope.row.modifier) }}</span>
                 </span>
               </template>
             </el-table-column>
             <el-table-column label="文件路径">
               <template #default="scope">
-                <span class="text-mono" style="font-size:12px;">{{ scope.row.path }}</span>
+                <span class="text-mono diff-path-text">{{ scope.row.path }}</span>
               </template>
             </el-table-column>
           </el-table>
           <el-pagination
-            class="mt-3"
+            class="diff-pagination"
             background
             layout="total, sizes, prev, pager, next"
             :total="filteredDiffChanges.length"
@@ -275,7 +378,6 @@ export default {
   data() {
     return {
       searchKeyword: '',
-      compareMode: false,
       restoreDialogVisible: false,
       deleteDialogVisible: false,
       batchDeleteDialogVisible: false,
@@ -288,7 +390,7 @@ export default {
       diffError: '',
       diffLoading: false,
       diffRequestId: 0,
-      selectedSnapshots: [],
+      comparedPair: [],
       restoreForm: { path: '', verify: false },
       diffCurrentPage: 1,
       diffPageSize: 20,
@@ -317,27 +419,60 @@ export default {
     // 父组件刷新列表后（增删改/同步），清空勾选，避免已删除快照残留在批量删除选择中
     snapshots() {
       this.clearTableSelection();
-      this.selectedSnapshots = [];
+      this.comparedPair = [];
+      const maxPage = Math.max(1, Math.ceil(this.filteredSnapshots.length / this.pageSize));
+      if (this.currentPage > maxPage) {
+        this.currentPage = 1;
+      }
     }
   },
   computed: {
+    hasActiveFilter() {
+      return Boolean((this.searchKeyword || '').trim());
+    },
     filteredSnapshots() {
-      if (!this.searchKeyword) return this.snapshots;
-      const q = this.searchKeyword.toLowerCase();
-      return this.snapshots.filter(s =>
-        (s.hostname && s.hostname.toLowerCase().includes(q)) ||
-        (s.paths || []).some(p => p.toLowerCase().includes(q))
-      );
+      const raw = (this.searchKeyword || '').trim();
+      if (!raw) return this.snapshots;
+      const q = raw.toLowerCase();
+      return this.snapshots.filter(s => {
+        const matchShortId = s.short_id && String(s.short_id).toLowerCase().includes(q);
+        const matchFullId = s.id && String(s.id).toLowerCase().includes(q);
+        const matchHost = s.hostname && String(s.hostname).toLowerCase().includes(q);
+        const matchTags = (s.tags || []).some(t => String(t).toLowerCase().includes(q));
+        const matchPaths = (s.paths || []).some(p => String(p).toLowerCase().includes(q));
+        return matchShortId || matchFullId || matchHost || matchTags || matchPaths;
+      });
     },
     paginatedSnapshots() {
       const s = (this.currentPage - 1) * this.pageSize;
       return this.filteredSnapshots.slice(s, s + this.pageSize);
     },
+    sortedSelectedPair() {
+      if (this.selectedRows.length !== 2) return [];
+      return [...this.selectedRows].sort((a, b) => new Date(a.time || 0) - new Date(b.time || 0));
+    },
     diffDrawerTitle() {
-      if (this.selectedSnapshots.length === 2) {
-        return `${formatTime(this.selectedSnapshots[0].time)} → ${formatTime(this.selectedSnapshots[1].time)}`;
+      if (this.comparedPair.length === 2) {
+        return `${formatTime(this.comparedPair[0].time)} → ${formatTime(this.comparedPair[1].time)}`;
       }
       return '快照差异比较';
+    },
+    diffStatsSummary() {
+      const stats = (this.diffResult && this.diffResult.statistics) || {};
+      const changes = (this.diffResult && Array.isArray(this.diffResult.changes)) ? this.diffResult.changes : [];
+      const added = typeof stats.added?.files === 'number'
+        ? stats.added.files
+        : changes.filter(c => c.modifier && c.modifier.includes('+')).length;
+      const removed = typeof stats.removed?.files === 'number'
+        ? stats.removed.files
+        : changes.filter(c => c.modifier && c.modifier.includes('-')).length;
+      const modified = changes.length > 0
+        ? changes.filter(c => c.modifier && c.modifier.includes('M')).length
+        : (typeof stats.changed_files === 'number' ? stats.changed_files : 0);
+      const total = changes.length > 0
+        ? changes.length
+        : (added + removed + modified);
+      return { added, modified, removed, total };
     },
     filteredDiffChanges() {
       if (!this.diffResult || !this.diffResult.changes) return [];
@@ -369,6 +504,16 @@ export default {
         this.$refs.snapshotTable.clearSelection();
       }
     },
+    compareSelectedRows() {
+      if (this.selectedRows.length !== 2) return;
+      const [first, second] = this.sortedSelectedPair;
+      if (JSON.stringify(first.paths) !== JSON.stringify(second.paths)) {
+        Message.warning('只能比较路径相同的快照');
+        return;
+      }
+      this.comparedPair = [first, second];
+      this.compareSnapshots(first, second);
+    },
     openBatchDelete() {
       if (this.selectedRows.length === 0) return;
       this.batchDeleteItems = [...this.selectedRows];
@@ -379,40 +524,39 @@ export default {
       this.batchDeleteDialogVisible = false;
       this.clearTableSelection();
     },
-    isSnapshotSelected(snapshot) {
-      return this.selectedSnapshots.some(s => s.id === snapshot.id);
-    },
-    enterCompareMode() {
-      this.compareMode = true;
-      this.selectedSnapshots = [];
-    },
-    exitCompareMode() {
-      this.compareMode = false;
-      this.selectedSnapshots = [];
-    },
-    handleSnapshotSelect(snapshot, checked) {
-      if (checked) {
-        if (this.isSnapshotSelected(snapshot)) return;
-        if (this.selectedSnapshots.length < 2) {
-          if (this.selectedSnapshots.length > 0) {
-            const first = this.selectedSnapshots[0];
-            if (JSON.stringify(first.paths) !== JSON.stringify(snapshot.paths)) {
-              Message.warning('只能比较路径相同的快照');
-              return;
-            }
-          }
-          this.selectedSnapshots.push(snapshot);
+    async copySnapshotId(snapshot) {
+      const text = (snapshot && (snapshot.id || snapshot.short_id)) || '';
+      if (!text) return;
+      try {
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+          await navigator.clipboard.writeText(text);
         } else {
-          Message.warning('最多选择 2 个快照');
+          this.fallbackCopyText(text);
         }
-      } else {
-        const idx = this.selectedSnapshots.findIndex(s => s.id === snapshot.id);
-        if (idx > -1) this.selectedSnapshots.splice(idx, 1);
+        Message.success('已复制完整快照 ID');
+      } catch (e) {
+        try {
+          this.fallbackCopyText(text);
+          Message.success('已复制完整快照 ID');
+        } catch (err) {
+          Message.error('复制失败，请手动复制');
+        }
       }
     },
-    showDiff() {
-      if (this.selectedSnapshots.length !== 2) return;
-      this.compareSnapshots(this.selectedSnapshots[0], this.selectedSnapshots[1]);
+    fallbackCopyText(text) {
+      const textarea = document.createElement('textarea');
+      textarea.value = text;
+      textarea.setAttribute('readonly', '');
+      textarea.style.position = 'fixed';
+      textarea.style.top = '-9999px';
+      textarea.style.left = '-9999px';
+      document.body.appendChild(textarea);
+      textarea.select();
+      const ok = document.execCommand('copy');
+      document.body.removeChild(textarea);
+      if (!ok) {
+        throw new Error('execCommand copy failed');
+      }
     },
     onViewFiles(snapshot) {
       const firstPath = Array.isArray(snapshot.paths) && snapshot.paths.length > 0 ? snapshot.paths[0] : '';
@@ -540,7 +684,8 @@ export default {
     },
     formatFileSize(bytes) {
       if (!bytes) return '0 B';
-      const k = 1024, units = ['B', 'KB', 'MB', 'GB', 'TB'];
+      const k = 1024;
+      const units = ['B', 'KB', 'MB', 'GB', 'TB'];
       const i = Math.floor(Math.log(bytes) / Math.log(k));
       return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + units[i];
     },
@@ -548,7 +693,9 @@ export default {
       if (!end || !start) return 'N/A';
       const ms = new Date(end) - new Date(start);
       if (ms < 0) return '无效';
-      const s = Math.floor(ms / 1000), m = Math.floor(s / 60), h = Math.floor(m / 60);
+      const s = Math.floor(ms / 1000);
+      const m = Math.floor(s / 60);
+      const h = Math.floor(m / 60);
       if (h) return `${h}h${m % 60}m`;
       if (m) return `${m}m${s % 60}s`;
       return `${s}s`;
@@ -561,16 +708,23 @@ export default {
       if (!t) return '-';
       return new Date(t).toLocaleString('zh-CN', { hour12: false });
     },
-    getModifierType(m) {
+    getModifierTone(m) {
       if (!m) return 'info';
-      if (m.includes('+')) return 'success';
-      if (m.includes('-')) return 'danger';
-      if (m.includes('M')) return 'warning';
+      if (m.includes('+')) return 'add';
+      if (m.includes('-')) return 'rem';
+      if (m.includes('M')) return 'mod';
       return 'info';
+    },
+    getModifierCode(m) {
+      if (!m) return '?';
+      if (m.includes('+')) return '+';
+      if (m.includes('-')) return '-';
+      if (m.includes('M')) return 'M';
+      return m.charAt(0);
     },
     getModifierLabel(m) {
       const map = { '+': '新增', '-': '删除', M: '修改', T: '类型', U: '元数据', '?': '损坏' };
-      return (m || '').split('').map(c => map[c] || c).join(',');
+      return (m || '').split('').map(c => map[c] || c).join('/');
     }
   }
 };
@@ -582,30 +736,277 @@ function formatTime(t) {
 </script>
 
 <style scoped>
+.snapshot-list {
+  color: var(--color-text-primary);
+}
+
+.tabular-num {
+  font-variant-numeric: tabular-nums;
+}
+
+/* 顶部工具栏 */
 .snapshot-toolbar {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
   gap: 12px;
   flex-wrap: wrap;
 }
-.toolbar-left { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.toolbar-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.toolbar-search { width: 280px; max-width: 100%; }
-
-.snapshot-id {
-  font-size: 11px;
-  color: var(--color-text-secondary);
-  padding: 1px 6px;
-  background: var(--color-bg-soft);
-  border-radius: 4px;
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 240px;
 }
-.table-tag { margin-right: 4px; margin-bottom: 2px; }
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.toolbar-search {
+  width: 300px;
+  max-width: 100%;
+}
+.toolbar-stats {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.stat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--color-bg-soft);
+  border: 1px solid var(--color-border);
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.stat-pill strong {
+  color: var(--color-text-primary);
+  font-weight: 600;
+}
+.stat-pill--match {
+  background: var(--brand-50);
+  border-color: var(--brand-200, var(--brand-500));
+  color: var(--brand-400);
+}
+.stat-pill--match strong {
+  color: var(--brand-400);
+}
+.toolbar-hint {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
 
-.tag-editor { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+/* 选中态批处理横幅 */
+.batch-action-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin-bottom: 14px;
+  border-radius: var(--radius-md, 10px);
+  background: var(--brand-50);
+  border: 1px solid var(--brand-500);
+}
+.batch-action-bar__info {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+.batch-action-bar__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--brand-400);
+  box-shadow: 0 0 0 3px var(--brand-100);
+  flex-shrink: 0;
+}
+.batch-action-bar__count {
+  color: var(--color-text-primary);
+}
+.batch-action-bar__count strong {
+  color: var(--brand-400);
+  font-variant-numeric: tabular-nums;
+}
+.batch-action-bar__pair {
+  font-size: 12px;
+  color: var(--brand-400);
+  padding: 2px 8px;
+  border-radius: var(--radius-xs, 4px);
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  font-variant-numeric: tabular-nums;
+}
+.batch-action-bar__tip {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+.batch-action-bar__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.batch-action-bar__clear {
+  color: var(--color-text-secondary);
+  padding-left: 6px;
+  padding-right: 6px;
+}
+.batch-action-bar__clear:hover {
+  color: var(--color-text-primary);
+}
+.batch-bar-fade-enter-active,
+.batch-bar-fade-leave-active {
+  transition: opacity 180ms ease, transform 180ms ease;
+}
+.batch-bar-fade-enter,
+.batch-bar-fade-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+
+/* 表格单元格美化 */
+.snapshot-time {
+  font-weight: 600;
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.snapshot-id-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.snapshot-id-pill {
+  display: inline-flex;
+  align-items: center;
+  font-size: 12px;
+  color: var(--brand-400);
+  padding: 2px 8px;
+  background: var(--color-bg-soft);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-full, 9999px);
+  line-height: 1.4;
+}
+.copy-id-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs, 4px);
+  background: transparent;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: color 150ms ease, background-color 150ms ease, border-color 150ms ease;
+}
+.copy-id-btn:hover {
+  color: var(--brand-400);
+  background: var(--brand-50);
+  border-color: var(--color-border);
+}
+.snapshot-host {
+  color: var(--color-text-primary);
+}
+.snapshot-path {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
+
+/* 标签列 */
+.tag-cell {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  align-items: center;
+}
+.snapshot-tag-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  border-radius: var(--radius-full, 9999px);
+  background: var(--brand-50);
+  border: 1px solid var(--brand-200, var(--color-border));
+  color: var(--brand-400);
+}
+.tag-ghost-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  font-size: 11px;
+  line-height: 1.4;
+  border-radius: var(--radius-full, 9999px);
+  background: transparent;
+  border: 1px dashed var(--color-border);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: color 150ms ease, border-color 150ms ease, background-color 150ms ease;
+}
+.tag-ghost-trigger:hover {
+  color: var(--brand-400);
+  border-color: var(--brand-500);
+  background: var(--brand-50);
+}
+
+/* 操作列 */
+.row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  flex-wrap: nowrap;
+}
+.row-action-btn {
+  margin-left: 0 !important;
+  padding: 4px 6px;
+  border-radius: var(--radius-xs, 4px);
+}
+.row-action-btn--danger {
+  color: var(--danger-500) !important;
+}
+.row-action-btn--danger:hover {
+  color: var(--danger-600) !important;
+}
+
+/* 标签编辑对话框 */
+.tag-editor {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px;
+  border-radius: var(--radius-md, 10px);
+  background: var(--color-bg-soft);
+  border: 1px solid var(--color-border);
+}
 .tag-editor__tag { margin: 0; }
 .tag-editor__input { width: 120px; }
+
+.form-tip {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
 
 /* 批量删除对话框 */
 .batch-delete-list {
@@ -613,83 +1014,259 @@ function formatTime(t) {
   max-height: 240px;
   overflow-y: auto;
   background: var(--color-bg-soft);
-  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 10px);
   padding: 10px 14px;
 }
 .batch-delete-item {
   display: flex;
   justify-content: space-between;
   gap: 12px;
-  padding: 4px 0;
+  padding: 5px 0;
   font-size: 13px;
+  border-bottom: 1px dashed var(--color-border);
+}
+.batch-delete-item:last-child {
+  border-bottom: 0;
 }
 
 /* 空状态 */
-.empty { text-align: center; padding: 60px 20px; }
-.empty--small { padding: 30px 20px; }
-.empty__title { font-size: 16px; font-weight: 600; color: var(--color-text-primary); }
-.empty__desc { font-size: 13px; color: var(--color-text-secondary); margin-top: 4px; }
+.empty {
+  text-align: center;
+  padding: 56px 20px;
+  background: var(--color-bg-card);
+  border: 1px dashed var(--color-border);
+  border-radius: var(--radius-lg, 14px);
+}
+.empty--small {
+  padding: 32px 20px;
+}
+.empty__icon {
+  font-size: 32px;
+  color: var(--color-text-secondary);
+  margin-bottom: 10px;
+  display: inline-block;
+}
+.empty__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.empty__desc {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-top: 6px;
+}
 
 /* 删除对话框元数据 */
 .delete-meta {
   margin-top: 16px;
   background: var(--color-bg-soft);
-  border-radius: var(--radius-md);
-  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md, 10px);
+  padding: 12px 14px;
 }
 .delete-meta > div {
   display: flex;
   justify-content: space-between;
   padding: 6px 0;
   font-size: 13px;
+  border-bottom: 1px dashed var(--color-border);
+}
+.delete-meta > div:last-child {
+  border-bottom: 0;
 }
 
 /* 差异抽屉 */
-.diff-drawer { padding: 16px; }
-.diff-loading { min-height: 200px; }
+.diff-drawer {
+  padding: 16px 20px 24px;
+}
+.diff-loading {
+  min-height: 220px;
+}
 
-.diff-stats {
+/* 4 张小 KPI 卡片 */
+.diff-kpi-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 16px;
 }
-.diff-stat {
-  text-align: center;
-  padding: 16px;
-  border-radius: var(--radius-lg);
-  background: var(--color-bg-soft);
+.diff-kpi {
+  padding: 14px 16px;
+  border-radius: var(--radius-md, 10px);
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-top-width: 3px;
 }
-.diff-stat--total { background: var(--brand-50); }
-.diff-stat--add { background: var(--success-50); }
-.diff-stat--remove { background: var(--danger-50); }
-.diff-stat__num {
-  font-size: 26px;
-  font-weight: 700;
-  color: var(--color-text-primary);
+.diff-kpi--add {
+  border-top-color: var(--success-500);
+  background: var(--success-50);
 }
-.diff-stat__label {
+.diff-kpi--mod {
+  border-top-color: var(--warning-500);
+  background: var(--warning-50);
+}
+.diff-kpi--rem {
+  border-top-color: var(--danger-500);
+  background: var(--danger-50);
+}
+.diff-kpi--total {
+  border-top-color: var(--brand-500);
+  background: var(--brand-50);
+}
+.diff-kpi__top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.diff-kpi__label {
   font-size: 12px;
   color: var(--color-text-secondary);
-  margin-top: 4px;
+  font-weight: 500;
+}
+.diff-kpi__num {
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin-top: 6px;
+  line-height: 1.2;
+}
+.diff-code-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-xs, 4px);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 700;
+}
+.diff-code-badge--add {
+  background: var(--success-500);
+  color: var(--color-text-on-brand, #ffffff);
+}
+.diff-code-badge--mod {
+  background: var(--warning-500);
+  color: var(--color-text-on-brand, #ffffff);
+}
+.diff-code-badge--rem {
+  background: var(--danger-500);
+  color: var(--color-text-on-brand, #ffffff);
+}
+.diff-code-badge--total {
+  background: var(--brand-500);
+  color: var(--color-text-on-brand, #ffffff);
 }
 
+/* 差异筛选栏 */
 .diff-toolbar {
   display: flex;
   gap: 10px;
   align-items: center;
   margin-bottom: 12px;
+  padding: 10px 12px;
+  border-radius: var(--radius-md, 10px);
+  background: var(--color-bg-soft);
+  border: 1px solid var(--color-border);
   flex-wrap: wrap;
 }
+.diff-toolbar__select {
+  width: 132px;
+}
+.diff-toolbar__search {
+  flex: 1;
+  min-width: 180px;
+  max-width: 340px;
+}
+.diff-toolbar__count {
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+}
 
+/* 差异类型彩色等宽徽标 */
+.diff-type-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px 2px 4px;
+  border-radius: var(--radius-full, 9999px);
+  font-size: 12px;
+  font-weight: 500;
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-soft);
+  color: var(--color-text-primary);
+}
+.diff-type-pill__code {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 700;
+}
+.diff-type-pill--add {
+  background: var(--success-50);
+  border-color: var(--success-500);
+  color: var(--success-600);
+}
+.diff-type-pill--add .diff-type-pill__code {
+  background: var(--success-500);
+  color: var(--color-text-on-brand, #ffffff);
+}
+.diff-type-pill--mod {
+  background: var(--warning-50);
+  border-color: var(--warning-500);
+  color: var(--warning-600);
+}
+.diff-type-pill--mod .diff-type-pill__code {
+  background: var(--warning-500);
+  color: var(--color-text-on-brand, #ffffff);
+}
+.diff-type-pill--rem {
+  background: var(--danger-50);
+  border-color: var(--danger-500);
+  color: var(--danger-600);
+}
+.diff-type-pill--rem .diff-type-pill__code {
+  background: var(--danger-500);
+  color: var(--color-text-on-brand, #ffffff);
+}
+.diff-type-pill--info {
+  background: var(--brand-50);
+  border-color: var(--brand-500);
+  color: var(--brand-400);
+}
+.diff-type-pill--info .diff-type-pill__code {
+  background: var(--brand-500);
+  color: var(--color-text-on-brand, #ffffff);
+}
+.diff-path-text {
+  font-size: 12px;
+  color: var(--color-text-primary);
+  word-break: break-all;
+}
+
+.diff-pagination,
 .snapshot-pagination {
-  margin-top: 18px;
-  padding: 14px 0 6px;
+  margin-top: 16px;
+  padding: 10px 0 4px;
   display: flex;
   justify-content: flex-end;
 }
 
 @media (max-width: 768px) {
-  .snapshot-pagination { justify-content: center; }
+  .diff-kpi-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .snapshot-pagination,
+  .diff-pagination {
+    justify-content: center;
+  }
 }
 </style>
